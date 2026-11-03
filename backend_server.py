@@ -2811,8 +2811,17 @@ sfc /scannow"></textarea>
                     .then(function (res) {
                         try {
                             const url = typeof input === 'string' ? input : (input && input.url) || '';
-                            if (res.status >= 500 && url.indexOf('/api/') !== -1)
-                                pushPcLog('network', 'خطای سرور ' + res.status + ' — ' + url, '');
+                            if (res.status >= 400 && url.indexOf('/api/') !== -1) {
+                                /* بدنهٔ پاسخ خطا — سرور برای ۵۰۰ متن کامل
+                                   خطا (trace) را برمی‌گرداند؛ ثبتش می‌کنیم
+                                   تا علت دقیق در «خطاهای برنامه» دیده شود. */
+                                const st0 = res.status;
+                                res.clone().text().then(function (t) {
+                                    pushPcLog('network',
+                                        'خطای سرور ' + st0 + ' — ' + url,
+                                        (t || '').slice(0, 900));
+                                }).catch(function () {});
+                            }
                         } catch (e) {}
                         return res;
                     })
@@ -10851,9 +10860,10 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                                     save_settings(merged)
                                     log_event(f"Settings model migrated at fetch: "
                                               f"'{saved_model}' -> '{cand}'")
-                                    msg += (f" ⚠️ مدل ذخیره‌شدهٔ شما «{saved_model}» "
-                                            f"در فهرست سرویس نبود (بازنشسته شده؟)؛ "
-                                            f"به «{cand}» تغییر یافت.")
+                                    # فقط ثبت وضعیت — متن پیام بعد از ساختِ
+                                    # پیام موفقیت اضافه می‌شود (قبلاً اینجا
+                                    # جمع می‌شد و «msg = ✅…» بعدی رویش
+                                    # بازنویسی می‌کرد).
                                     switched_info = {"from": saved_model, "to": cand}
                                 except Exception as e:
                                     log_event(f"Model migration at fetch failed: {e}")
@@ -10865,6 +10875,10 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                             msg += f" — {free_n} مدل رایگان"
                         if skipped:
                             msg += f" · {len(skipped)} مدل غیرچتی کنار گذاشته شد"
+                        if switched_info:
+                            msg += (f" ⚠️ مدل ذخیره‌شدهٔ شما «{switched_info['from']}» "
+                                    f"در فهرست سرویس نبود (بازنشسته شده؟)؛ "
+                                    f"به «{switched_info['to']}» تغییر یافت.")
                         self.send_json_res({
                             "success": True,
                             "verified": True,       # واقعاً از سرور آمده
