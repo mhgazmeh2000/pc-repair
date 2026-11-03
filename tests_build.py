@@ -155,8 +155,14 @@ chk(_lf_only == 0, "همهٔ خطوط build.bat دارای CRLF هستند",
 # ناشی از اجرا از مسیر دیگر رخ ندهد.
 chk(b'cd /d "%~dp0"' in raw,
     "build.bat همیشه از پوشهٔ خودش اجرا می‌شود (cd /d %~dp0)")
-chk(b"Current folder: %CD%" in raw,
+chk(b"Current folder: !CD!" in raw,
     "پیام خطای فایل گمشده، پوشهٔ جاری را نشان می‌دهد")
+# رگرسیون پرانتز: مسیرهایی مثل «...workspace-xxx (1)\pc-repair» اگر با
+# توسعهٔ فوری %CD% داخل بلوک if باز شوند، بلوک را می‌شکنند
+# («was unexpected at this time»). توسعهٔ تأخیری !CD! در زمان اجرا
+# باز می‌شود و مقاوم است.
+chk(b"%CD%" not in raw,
+    "هیچ توسعهٔ فوری %CD% در build.bat نیست (مقاوم در برابر پرانتز مسیر)")
 
 print()
 print("═" * 64)

@@ -106,7 +106,7 @@ for %%f in (pc_toolbox_pro.py backend_server.py repair_runner.py command_guard.p
 if !MISSING!==1 (
     echo.
     echo [ERROR] Some files are missing. Cannot continue.
-    echo         Current folder: %CD%
+    echo         Current folder: !CD!
     echo         build.bat must sit in the project folder, next to
     echo         backend_server.py and pc_toolbox_pro.py.
     pause
