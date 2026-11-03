@@ -1,0 +1,19 @@
+# فایل‌های زمان اجرا — هرگز در git نباشند
+app_settings.json
+*.log
+
+# خروجی ساخت
+build/
+dist/
+*.exe
+
+# پایتون
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# سیستم‌عامل / ادیتور
+Thumbs.db
+.DS_Store
+.vscode/

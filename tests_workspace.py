@@ -130,7 +130,7 @@ chk(r['success'], "فایل بزرگ باز می‌شود")
 os.remove(big)
 
 huge = os.path.join(ROOT, 'huge.py')
-with open(huge, 'w') as f: f.write('x = 1\n' * 1600000)  # ~۱۱ مگابایت
+with open(huge, 'w') as f: f.write('x = 1\n' * 1800000)  # ~۱۰.۳ MiB، قطعاً بالاتر از آستانهٔ ۱۰ MiB
 r = ws.read_file('huge.py')
 chk(r['success'] and r.get('large'), "پرچم large برای فایل خیلی بزرگ")
 # با max_kb فقط ابتدا خوانده می‌شود و truncated پرچم می‌خورد

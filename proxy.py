@@ -94,6 +94,47 @@ def _norm_proxy(value, default_scheme="http"):
     return f"{default_scheme}://{v}"
 
 
+def _parse_proxy_server(server):
+    """
+    مقدار ProxyServer رجیستری را به دیکشنری requests تبدیل می‌کند.
+
+    فرمت‌های پشتیبانی‌شده:
+        "127.0.0.1:8080"                                   (همهٔ پروتکل‌ها)
+        "http=127.0.0.1:8080;https=127.0.0.1:8080;socks=..."
+    اولویت: https → http → socks. چون همهٔ مقصدهای برنامه HTTPS
+    هستند و HTTP proxy به PySocks هم نیاز ندارد، فقط وقتی socks سر
+    آخر است از آن استفاده می‌کنیم (مثلاً وقتی ابزاری فقط socks ثبت
+    کرده باشد).
+    """
+    server = (server or "").strip()
+    if not server:
+        return None
+
+    if "=" not in server:
+        u = _norm_proxy(server, "http")
+        return {"http": u, "https": u} if u else None
+
+    parts = {}
+    for chunk in server.split(";"):
+        if "=" in chunk:
+            k, v = chunk.split("=", 1)
+            parts[k.strip().lower()] = v.strip()
+
+    out = {}
+    if parts.get("https"):
+        out["https"] = _norm_proxy(parts["https"], "http")
+    if parts.get("http"):
+        out["http"] = _norm_proxy(parts["http"], "http")
+    if not out.get("https") and out.get("http"):
+        out["https"] = out["http"]
+    if not out:                                  # فقط socks= ثبت شده
+        u = _norm_proxy(parts.get("socks") or "", "socks5h")
+        if u:
+            out = {"http": u, "https": u}
+    out = {k: v for k, v in out.items() if v}
+    return out or None
+
+
 def _read_windows_registry_proxy():
     """پروکسی را مستقیماً از رجیستری ویندوز می‌خواند."""
     if os.name != 'nt':
@@ -113,31 +154,7 @@ def _read_windows_registry_proxy():
 
         if not server:
             return None
-
-        # فرمت ممکن است "host:port" یا "http=h:p;socks=h:p" باشد
-        server = server.strip()
-        if "=" in server:
-            parts = {}
-            for chunk in server.split(";"):
-                if "=" in chunk:
-                    k, v = chunk.split("=", 1)
-                    parts[k.strip().lower()] = v.strip()
-            # SOCKS اولویت دارد چون هم HTTP و هم HTTPS را تونل می‌کند
-            if parts.get("socks"):
-                u = _norm_proxy(parts["socks"], "socks5h")
-                return {"http": u, "https": u} if u else None
-            out = {}
-            if parts.get("http"):
-                out["http"] = _norm_proxy(parts["http"], "http")
-            if parts.get("https"):
-                out["https"] = _norm_proxy(parts["https"], "http")
-            elif out.get("http"):
-                out["https"] = out["http"]
-            out = {k: v for k, v in out.items() if v}
-            return out or None
-
-        u = _norm_proxy(server, "http")
-        return {"http": u, "https": u} if u else None
+        return _parse_proxy_server(server)
     except FileNotFoundError:
         return None
     except Exception:
@@ -183,17 +200,183 @@ def get_system_proxy(force=False):
     return proxies
 
 
+# الگوهای آداپتورهای تونل/VPN رایج — فقط برای «اطلاع‌رسانی» UI.
+# این ابزارها (Psiphon حالت VPN، VPN خود ویندوز، VeePN، WireGuard،
+# OpenVPN و...) تونل شبکه می‌سازند نه پروکسی HTTP/SOCKS؛ درخواست‌های
+# مستقیم برنامه به‌طور شفاف از route ویندوز و تونل عبور می‌کنند.
+_TUN_PATTERNS = [
+    (re.compile(r'veepn', re.I), "VeePN"),
+    (re.compile(r'psiphon', re.I), "Psiphon"),
+    # Hotspot Shield: نام آداپتورش هیچ‌کدام از واژه‌های رایج VPN را ندارد
+    (re.compile(r'hotspot|anchorfree|hsstap|hsswd|\bhss\b', re.I),
+     "Hotspot Shield"),
+    (re.compile(r'wireguard|wintun', re.I), "WireGuard/Wintun"),
+    (re.compile(r'openvpn|tun-?tap|tap-?windows', re.I), "OpenVPN/TAP"),
+    # VPN خود ویندوز (Settings→VPN): آداپتور WAN Miniport است، وقتی هم
+    # وصل نیست اصلاً آداپتور ندارد (برایش rasdial/Get-VpnConnection
+    # را هم می‌خوانیم — پایین‌تر).
+    (re.compile(r'wan.?miniport|ikev2|\bl2tp\b|sstp|pptp', re.I),
+     "VPN ویندوز"),
+    (re.compile(r'\bvpn\b|vpn-|openconnect|cisco anyconnect', re.I),
+     "VPN سیستمی"),
+    (re.compile(r'hiddify|v2ray|sing-?box|clash', re.I), "ابزار تونل"),
+]
+
+
+def _tun_kind(adapter_name):
+    """نوع ابزار تونل را از نام/توضیح آداپتور حدس می‌زند."""
+    for pat, label in _TUN_PATTERNS:
+        if pat.search(adapter_name or ""):
+            return label
+    return None
+
+
+def _detect_tun_vpns():
+    """
+    فهرست آداپتورهای تونل/VPN فعال — صرفاً اطلاع‌رسانی.
+
+    خروجی: {"detected": bool, "adapters": [{"name","kind"}], "kinds": [...]}
+    """
+    if os.name != "nt":
+        return {"detected": False, "adapters": [], "kinds": []}
+    try:
+        import subprocess
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+               "Get-NetAdapter -IncludeHidden | Where-Object { $_.Status -eq 'Up' } | Select-Object Name, InterfaceDescription | ConvertTo-Json -Compress"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=7,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        import json as _json
+        rows = []
+        try:
+            data = _json.loads(r.stdout or "[]")
+            rows = data if isinstance(data, list) else [data]
+        except Exception:
+            rows = []
+        adapters, kinds = [], []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for field in ("Name", "InterfaceDescription"):
+                val = str(row.get(field) or "")
+                kind = _tun_kind(val)
+                if kind and val:
+                    adapters.append({"name": val, "kind": kind})
+                    if kind not in kinds:
+                        kinds.append(kind)
+                    break
+        return {"detected": bool(adapters), "adapters": adapters[:6],
+                "kinds": kinds}
+    except Exception:
+        return {"detected": False, "adapters": [], "kinds": []}
+
+
+def _parse_rasdial(text):
+    """
+    خروجی rasdial را پارس می‌کند — نام VPNهای «وصل‌شده».
+
+    نمونهٔ خروجی وصل:
+        Connected to Work VPN
+        Command completed successfully.
+    خروجی قطع:
+        No connections
+    """
+    conns = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line.lower().startswith("connected to "):
+            name = line[len("connected to "):].strip()
+            if name:
+                conns.append(name)
+    return conns
+
+
+def _parse_vpn_json(text):
+    """خروجی JSONِ Get-VpnConnection را پارس می‌کند (نام + وضعیت)."""
+    import json as _json
+    try:
+        d = _json.loads(text or "[]")
+    except Exception:
+        return []
+    if isinstance(d, dict):
+        d = [d]
+    out = []
+    for row in d:
+        if isinstance(row, dict):
+            name = str(row.get("Name") or "").strip()
+            status = str(row.get("ConnectionStatus") or "").strip()
+            if name:
+                out.append({"name": name, "status": status})
+    return out
+
+
+def _detect_windows_vpn():
+    """
+    VPNهای بخش Settings ← Network & internet ← VPN ویندوز (RAS).
+
+    برخلاف ابزارهای ثالث، این VPNها وقتی وصل نباشند آداپتوری ندارند؛
+    پس منبع درست خود RAS است:
+      rasdial          → فهرست وصل‌شده‌ها (سبک، همه‌جا هست)
+      Get-VpnConnection → همهٔ پیکربندی‌شده‌ها + وضعیت (قطع/وصل)
+
+    خروجی: {"connected": [نام...], "configured": [{name,status}...]}
+    """
+    res = {"connected": [], "configured": []}
+    if os.name != "nt":
+        return res
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["rasdial"], capture_output=True, text=True, timeout=7,
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        res["connected"] = _parse_rasdial(r.stdout or "")
+    except Exception:
+        pass
+    try:
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+               "Get-VpnConnection | Select-Object Name,ConnectionStatus "
+               "| ConvertTo-Json -Compress"]
+        r2 = subprocess.run(cmd, capture_output=True, text=True, timeout=7,
+                            errors="replace",
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        res["configured"] = _parse_vpn_json(r2.stdout or "")
+    except Exception:
+        pass
+    return res
+
+
+def _detect_veepn():
+    """سازگاری با نسخه‌های قبل — فقط VeePN را گزارش می‌دهد."""
+    t = _detect_tun_vpns()
+    names = [a["name"] for a in t["adapters"] if a["kind"] == "VeePN"]
+    return {"detected": bool(names), "details": names[:5]}
+
+
 def system_proxy_info():
-    """اطلاعات نمایشی پروکسی سیستم برای رابط کاربری."""
+    """اطلاعات نمایشی پروکسی سیستم و سازگاری VPN برای رابط کاربری."""
     p = get_system_proxy(force=True)
+    veepn = _detect_veepn()
+    tun = _detect_tun_vpns()
+    wvpn = _detect_windows_vpn()
+
+    adapters = list(tun["adapters"])
+    kinds = list(tun["kinds"])
+    # VPN وصل‌شدهٔ خود ویندوز هم عملاً یک تونل فعال است
+    for name in wvpn.get("connected", []):
+        adapters.append({"name": name, "kind": "VPN ویندوز"})
+        if "VPN ویندوز" not in kinds:
+            kinds.append("VPN ویندوز")
+
+    base = {"veepn": veepn, "tun_vpns": adapters, "tun_kinds": kinds,
+            "windows_vpn": wvpn}
     if not p:
-        return {"found": False, "proxies": None, "proxies_list": []}
+        return dict(base, found=False, proxies=None, proxies_list=[])
     seen, lst = set(), []
     for scheme, url in p.items():
         if url not in seen:
             seen.add(url)
             lst.append(f"{scheme}: {url}")
-    return {"found": True, "proxies": p, "proxies_list": lst}
+    return dict(base, found=True, proxies=p, proxies_list=lst)
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +405,22 @@ def _resolve_proxies(mode=None, manual_url=None):
     if not p:
         return None, "مستقیم (پروکسی سیستم تنظیم نشده)"
     return p, "پروکسی سیستم"
+
+
+def _is_local_target(url):
+    """
+    آیا مقصد همین سیستم است؟ (Ollama/LM Studio روی 127.0.0.1)
+
+    درخواست به مقصد محلی هرگز نباید از پروکسی عبور کند — پروکسیِ
+    خارجی نه‌تنها کمکی نمی‌کند، بلکه خطاهای عجیبی مثل
+    «400 The plain HTTP request was sent to HTTPS port» می‌دهد.
+    """
+    try:
+        from urllib.parse import urlparse
+        h = (urlparse(url).hostname or "").lower()
+        return h in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+    except Exception:
+        return False
 
 
 def _headers(extra):
@@ -259,6 +458,10 @@ def test_connection(mode=None, proxy_url=None, base_url=None, api_key=None,
               or "https://api.groq.com/openai/v1").rstrip("/")
     if not target.endswith("/models"):
         target = target.split("/chat/completions")[0].rstrip("/") + "/models"
+
+    # مقصد محلی (Ollama/LM Studio) — هرگز از پروکسی عبور نکن
+    if proxies and _is_local_target(target):
+        proxies, via = None, "مستقیم (مقصد محلی)"
 
     if proxies:
         sample = next(iter(proxies.values()), "")
@@ -319,7 +522,8 @@ def _is_transient(exc):
         "ProxyError", "NewConnectionError", "MaxRetryError")
 
 
-def forward_ai_request(url, headers, payload=None, method='POST', use_socks=None):
+def forward_ai_request(url, headers, payload=None, method='POST',
+                       use_socks=None, timeout=None):
     """
     درخواست را با حالت اتصال انتخابی ارسال می‌کند.
 
@@ -327,13 +531,41 @@ def forward_ai_request(url, headers, payload=None, method='POST', use_socks=None
     مستقیم امتحان می‌شود (و برعکس) — چون کاربر ممکن است وسط کار
     سایفون را ببندد یا باز کند. خطاهای گذرا (مثل ReadTimeout) یک بار
     همان مسیر دوباره امتحان می‌شوند.
+
+    timeout: مهلت اختصاصی این درخواست (ثانیه). برای کاوشِ سریع
+    رایگان‌بودن مدل‌ها استفاده می‌شود تا مسیرهای مرده ۱۸۰ ثانیه
+    کاربر را معطل نکنند.
     """
     st = _settings()
     verify = st.get("verify_tls", True)
-    timeout = int(st.get("request_timeout", 45))
+    # تحلیل‌های Defender/GPU و خروجی DISM ممکن است زمان زیادی برای پاسخ
+    # اول مدل نیاز داشته باشند. حداقل ۱۸۰ ثانیه از HTTP 0 ناشی از
+    # ReadTimeout کوتاه جلوگیری می‌کند. اگر فراخواننده مهلت اختصاصی
+    # داده باشد (کاوش مدل)، همان اعمال می‌شود.
+    try:
+        default_timeout = max(180, int(st.get("request_timeout", 180)))
+    except (TypeError, ValueError):
+        default_timeout = 180
+    if timeout is None:
+        timeout = default_timeout
+    else:
+        # مهلت صریحِ فراخواننده (کاوش مدل) عیناً اعمال می‌شود؛
+        # فقط مقدار نامعتبر به پیش‌فرض برمی‌گردد.
+        try:
+            timeout = int(timeout)
+            if timeout < 1:
+                timeout = default_timeout
+        except (TypeError, ValueError):
+            timeout = default_timeout
     req_headers = _headers(headers)
 
     proxies, via = _resolve_proxies()
+
+    # مقصد محلی (Ollama/LM Studio) — پروکسی بی‌معنا و مضر است؛ حتی
+    # مسیر جایگزین (پروکسی سیستم) هم برای مقصد محلی امتحان نشود.
+    local_tgt = _is_local_target(url)
+    if proxies and local_tgt:
+        proxies, via = None, "مستقیم (مقصد محلی)"
     attempts = []
 
     def _send(px):
@@ -352,7 +584,7 @@ def forward_ai_request(url, headers, payload=None, method='POST', use_socks=None
 
     # مسیر اصلی (با یک retry برای خطای گذرا) سپس مسیر جایگزین
     routes = [(proxies, via, 2)]
-    alt_px = None if proxies else get_system_proxy()
+    alt_px = None if (proxies or local_tgt) else get_system_proxy()
     alt_via = "مستقیم" if proxies else "پروکسی سیستم"
     if alt_px or proxies:
         routes.append((alt_px, alt_via, 1))
@@ -364,10 +596,15 @@ def forward_ai_request(url, headers, payload=None, method='POST', use_socks=None
                 return {"status": res.status_code, "data": res.text,
                         "via": label, "fallback": label != via}
             except Exception as e:
-                msg = f"{label}: {type(e).__name__}: {str(e)[:70]}"
+                msg = f"{label}: {type(e).__name__}: {str(e)[:160]}"
                 # از تکرارِ یک خطای یکسان (retry همان مسیر) در پیام نهایی پرهیز کن
                 if not attempts or attempts[-1] != msg:
                     attempts.append(msg)
+                # ReadTimeout یعنی «کل مهلت (مثلاً ۱۸۰ ثانیه) هیچ بایتی
+                # نیامد» — تلاش دوباره روی همان مسیر فقط چند دقیقهٔ دیگر
+                # معطل کاربر می‌شود. مسیر جایگزین (اگر باشد) امتحان می‌شود.
+                if type(e).__name__ == "ReadTimeout":
+                    break
                 if not _is_transient(e):
                     break   # خطای غیرگذرا — تلاش دوباره بی‌فایده است
 
@@ -400,10 +637,16 @@ def forward_ai_stream(url, headers, payload=None, use_socks=None):
 
     proxies, via = _resolve_proxies()
 
-    # استریم: کانکت کوتاه (حداکثر ۱۰ ثانیه) ولی خواندن بلند — مدل ممکن است
-    # قبل از اولین توکن مدتی فکر کند؛ یک عدد واحد برای استریم باعث
-    # «Read timed out»های بی‌مورد در پاسخ‌های کند می‌شد.
-    stream_timeout = (min(timeout, 10), max(timeout, 120))
+    # مقصد محلی (Ollama/LM Studio) — از پروکسی عبور نکن و مسیر جایگزین
+    # (پروکسی سیستم) را هم برایش امتحان نکن.
+    local_tgt = _is_local_target(url)
+    if proxies and local_tgt:
+        proxies, via = None, "مستقیم (مقصد محلی)"
+
+    # استریم: فقط اتصال سقف کوتاه دارد. برای خواندن پاسخ سقف زمانی نمی‌گذاریم؛
+    # مدل‌های reasoning یا حلقهٔ NEED_INFO ممکن است بیش از چند دقیقه پیش از
+    # اولین/آخرین توکن زمان ببرند. کاربر از UI می‌تواند درخواست را لغو کند.
+    stream_timeout = (min(timeout, 10), None)
 
     def _send(px):
         s = requests.Session()
@@ -435,7 +678,7 @@ def forward_ai_stream(url, headers, payload=None, use_socks=None):
     # مهم: اگر بخشی از پاسخ قبلاً به فرانت رفته باشد، retry/fallback متن را
     # تکرار می‌کند — پس فقط وقتی چیزی تحویل نشده دوباره امتحان می‌کنیم.
     routes = [(proxies, via, 2)]
-    alt_px = None if proxies else get_system_proxy()
+    alt_px = None if (proxies or local_tgt) else get_system_proxy()
     alt_via = "مستقیم" if proxies else "پروکسی سیستم"
     if alt_px or proxies:
         routes.append((alt_px, alt_via, 1))

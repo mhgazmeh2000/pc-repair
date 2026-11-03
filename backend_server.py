@@ -33,6 +33,8 @@ import code_changes
 import restore_point
 import repair_history
 import event_catalog
+import defender_inspector
+import defender_runner
 
 # عکس «قبل از تعمیر» برای هر job — پایهٔ حلقهٔ بستهٔ تأیید نتیجه.
 # job_id -> {"snapshot": {...}, "steps": [...], "titles": [...]}
@@ -116,6 +118,12 @@ def _data_dir():
 DATA_DIR = _data_dir()
 LOG_FILE = os.path.join(DATA_DIR, "pc_toolbox_history.log")
 SETTINGS_FILE = os.path.join(DATA_DIR, "app_settings.json")
+
+# مدل پیش‌فرض AI — همیشه از providers خوانده می‌شود تا وقتی سرویس‌دهنده
+# مدلی را بازنشسته کرد، فقط همان‌جا به‌روز شود (نمونهٔ واقعی: Groq مدلی
+# llama-3.3-70b-versatile را حذف کرد و همهٔ پیش‌فرض‌های هاردکد 404 دادند).
+DEFAULT_AI_MODEL = (providers.get_provider("groq") or {}).get(
+    "default_model", "openai/gpt-oss-120b")
 
 EMBEDDED_HTML = """<!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -434,6 +442,23 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         }
         .btn-ai:hover { background: linear-gradient(135deg, #a78bfa, #7c3aed); box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4); transform: translateY(-2px); }
         .btn-ai:active { transform: translateY(0) scale(0.98); }
+
+        /* نسخهٔ فشرده و استاندارد دکمهٔ AI — برای فرم‌های تنظیمات */
+        .btn-sm-ai {
+            background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+            color: white;
+            border: none;
+            padding: 7px 13px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.78rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .btn-sm-ai:hover { filter: brightness(1.15); transform: translateY(-1px); }
+        .btn-sm-ai:active { transform: translateY(0) scale(0.98); }
+        .btn-sm-ai:disabled { opacity: .55; cursor: default; transform: none; filter: none; }
 
         .btn-guide {
             background-color: rgba(255,255,255,0.05);
@@ -1073,6 +1098,11 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         .model-opt .m-meta {
             color: var(--text-muted); font-size: 0.7rem; flex-shrink: 0;
         }
+        .model-opt .m-test {
+            flex-shrink: 0; cursor: pointer; font-size: 0.75rem;
+            padding: 2px 4px; border-radius: 5px; opacity: .55;
+        }
+        .model-opt .m-test:hover { opacity: 1; background: rgba(59,130,246,0.25); }
         .model-dropdown .m-empty {
             padding: 14px; text-align: center;
             color: var(--text-muted); font-size: 0.78rem;
@@ -1679,6 +1709,57 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         }
         .btn-close-custom:hover { background: rgba(255,255,255,0.2); }
 
+
+
+
+
+        /* ── Command palette: fast navigation and tool access ─── */
+        .palette-backdrop { position:fixed;inset:0;display:none;align-items:flex-start;justify-content:center;padding:10vh 18px;z-index:10000;background:rgba(2,6,23,.72);backdrop-filter:blur(7px); }
+        .palette-backdrop.show { display:flex; } .palette { width:min(660px,100%);max-height:74vh;overflow:hidden;border:1px solid rgba(96,165,250,.36);border-radius:18px;background:#0f172a;box-shadow:0 25px 75px rgba(0,0,0,.56); }
+        .palette-input { width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border-color);background:transparent;color:white;padding:16px 18px;outline:0;font: .96rem Vazirmatn,Arial,sans-serif; }
+        .palette-list { overflow:auto;max-height:54vh;padding:8px; } .palette-item { width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:right;border:0;border-radius:10px;background:transparent;color:var(--text-main);padding:11px 12px;cursor:pointer;font-family:inherit; }
+        .palette-item:hover,.palette-item.selected { background:rgba(59,130,246,.16); } .palette-item small { color:var(--text-muted);direction:ltr;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:48%; } .palette-hint { color:var(--text-muted);font-size:.72rem;padding:10px 14px;border-top:1px solid var(--border-color); }
+        .palette-trigger { margin-top:10px;width:100%;cursor:pointer;color:var(--text-muted);background:rgba(15,23,42,.9);border:1px solid var(--border-color);border-radius:8px;padding:8px;font-family:inherit;font-size:.73rem;text-align:right; }
+        .palette-trigger:hover { color:white;border-color:#3b82f6; }
+
+        /* ── System & Security center ─────────────────────────── */
+        .center-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; margin:16px 0; }
+        .center-card { min-height:106px; padding:15px; border:1px solid var(--border-color); background:rgba(30,41,59,.66); border-radius:15px; }
+        .center-card .cc-title { color:var(--text-muted); font-size:.76rem; } .center-card .cc-value { margin-top:9px;color:white;font-size:1.08rem;font-weight:750; word-break:break-word; }
+        .center-report { border:1px solid var(--border-color); background:rgba(15,23,42,.65);border-radius:15px;padding:16px;line-height:1.9;color:var(--text-muted);white-space:pre-wrap; }
+        .state-good{color:#86efac!important}.state-warn{color:#fde68a!important}.state-bad{color:#fca5a5!important}
+        @media(max-width:820px){.center-grid{grid-template-columns:1fr 1fr}} @media(max-width:480px){.center-grid{grid-template-columns:1fr}}
+
+        /* ── Freebuff-inspired overview dashboard ─────────────── */
+        .overview-hero { position:relative; overflow:hidden; border:1px solid rgba(59,130,246,.28); background:linear-gradient(120deg,rgba(30,41,59,.96),rgba(30,58,138,.23)); border-radius:20px; padding:22px; margin-bottom:18px; }
+        .overview-hero:after { content:''; position:absolute; width:230px; height:230px; left:-55px; top:-130px; border-radius:50%; background:radial-gradient(circle,rgba(56,189,248,.17),transparent 68%); pointer-events:none; }
+        .overview-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:18px; }
+        .metric-card { min-height:92px; padding:15px; border:1px solid var(--border-color); background:rgba(30,41,59,.68); border-radius:15px; }
+        .metric-label { color:var(--text-muted);font-size:.75rem; } .metric-value { color:white;font-weight:800;font-size:1.24rem;margin-top:8px; }
+        .overview-grid { display:grid;grid-template-columns:1.2fr .8fr;gap:18px; } .quick-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px; }
+        .quick-action { text-align:right; cursor:pointer; border:1px solid var(--border-color); color:var(--text-main); background:rgba(15,23,42,.72); border-radius:12px;padding:13px;transition:.2s; font-family:inherit; }
+        .quick-action:hover { transform:translateY(-2px);border-color:#3b82f6;background:rgba(30,58,138,.22); } .quick-action small{display:block;color:var(--text-muted);margin-top:5px}
+        @media(max-width:900px){.overview-metrics{grid-template-columns:repeat(2,1fr)}.overview-grid{grid-template-columns:1fr}} @media(max-width:480px){.quick-grid{grid-template-columns:1fr}}
+
+        /* ── Freebuff-inspired command queue ───────────────────── */
+        .queue-shell { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:18px; }
+        .queue-list { display:flex; flex-direction:column; gap:10px; }
+        .queue-item { border:1px solid var(--border-color); background:rgba(30,41,59,.72); border-radius:14px; padding:13px; }
+        .queue-item-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+        .queue-state { border-radius:999px; padding:3px 9px; font-size:.72rem; font-weight:700; }
+        .queue-state.pending { background:rgba(148,163,184,.16); color:#cbd5e1; }
+        .queue-state.running { background:rgba(59,130,246,.18); color:#7dd3fc; }
+        .queue-state.done { background:rgba(34,197,94,.16); color:#86efac; }
+        .queue-state.error { background:rgba(239,68,68,.16); color:#fca5a5; }
+        .queue-command { display:block; margin-top:9px; padding:9px; white-space:pre-wrap; overflow:auto; background:#080f1d; color:#7dd3fc; border-radius:8px; direction:ltr; text-align:left; font: .78rem Consolas,monospace; }
+        .queue-empty { text-align:center; border:1px dashed var(--border-color); color:var(--text-muted); border-radius:16px; padding:44px 18px; }
+        .queue-side { border:1px solid var(--border-color); background:rgba(30,41,59,.55); border-radius:16px; padding:15px; height:max-content; }
+        .queue-input { width:100%; min-height:95px; box-sizing:border-box; resize:vertical; color:var(--text-main); background:#080f1d; border:1px solid var(--border-color); border-radius:10px; padding:10px; margin:9px 0; direction:ltr; text-align:left; font:.8rem Consolas,monospace; }
+        .queue-actions { display:flex; flex-wrap:wrap; gap:8px; }
+        .queue-actions button { border:0; border-radius:9px; padding:9px 12px; cursor:pointer; color:white; font-family:inherit; }
+        .queue-run { background:linear-gradient(135deg,#059669,#047857); } .queue-clear { background:#334155; } .queue-add { background:#2563eb; }
+        @media(max-width:850px){ .queue-shell{grid-template-columns:1fr;} }
+
         /* Formatted Markdown Code Styling */
         code {
             background-color: #0f172a;
@@ -1690,6 +1771,31 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             direction: ltr;
             display: inline-block;
         }
+
+        /* ═════════ Freebuff visual language overhaul ═════════
+           یک طراحی یکپارچهٔ slate/blue، با سطوح شیشه‌ای، card hierarchy
+           و فاصله‌گذاری فشرده‌تر؛ منطق و endpointهای برنامه تغییری ندارند. */
+        :root { --bg-main:#020617; --bg-card:rgba(30,41,59,.58); --bg-sidebar:rgba(15,23,42,.94); --border-color:rgba(71,85,105,.62); --accent-blue:#3b82f6; --accent-hover:#2563eb; --text-main:#e2e8f0; --text-muted:#94a3b8; --shadow-card:0 14px 34px rgba(2,6,23,.32); }
+        body { background:#020617; background-image:radial-gradient(800px 400px at 100% -5%,rgba(37,99,235,.13),transparent 62%),radial-gradient(650px 420px at 0 100%,rgba(124,58,237,.08),transparent 65%); }
+        .sidebar { width:256px; padding:20px 14px; background:var(--bg-sidebar); backdrop-filter:blur(20px); border-left:1px solid rgba(71,85,105,.5); box-shadow:-12px 0 40px rgba(2,6,23,.23); }
+        .brand-header { gap:11px;margin-bottom:13px;padding:0 5px 15px;border-bottom:1px solid rgba(71,85,105,.38); }
+        .brand-icon { width:46px;height:46px;border-radius:15px;background:linear-gradient(135deg,#3b82f6,#4f46e5);box-shadow:0 10px 25px rgba(37,99,235,.27); }
+        .nav { margin-top:7px; } .nav-link-custom { min-height:43px;margin-bottom:3px;padding:10px 12px;border-radius:11px;font-size:.86rem;font-weight:600; border-right:0!important;justify-content:flex-start; }
+        .nav-link-custom:hover,.nav-link-custom.active { color:#bfdbfe;background:rgba(37,99,235,.16);box-shadow:inset 0 0 0 1px rgba(96,165,250,.18); }
+        .main-content { margin-right:256px;padding:24px;max-width:1720px; }
+        .top-bar,.ai-card,.tool-card,.dev-card,.overview-hero,.center-card,.metric-card,.queue-side,.queue-item { background:rgba(30,41,59,.52)!important;border-color:rgba(71,85,105,.5)!important;box-shadow:0 8px 22px rgba(2,6,23,.18); }
+        .top-bar { min-height:82px;padding:18px 20px;border-radius:22px;margin-bottom:18px;backdrop-filter:blur(12px); }
+        .ai-card { border-radius:22px!important;padding:18px!important; } .tool-card { border-radius:18px!important;padding:17px!important;min-height:232px; }
+        .tools-grid { gap:14px!important; } .tool-title { font-size:1rem!important; } .tool-desc { font-size:.8rem!important;line-height:1.8!important; }
+        .category-pills { gap:8px!important;margin-bottom:18px!important; } .pill-btn { border:1px solid rgba(71,85,105,.7)!important;background:rgba(30,41,59,.58)!important;border-radius:999px!important;padding:7px 13px!important; }
+        .pill-btn.active { background:rgba(37,99,235,.2)!important;border-color:rgba(96,165,250,.56)!important;color:#bfdbfe!important; }
+        .search-box input,.input-row input,.queue-input,.palette-input { background:rgba(2,6,23,.68)!important;border-color:rgba(71,85,105,.68)!important;border-radius:14px!important; }
+        .btn-run,.btn-ai,.btn-exec,.btn-chain { border-radius:11px!important;box-shadow:none!important; } .btn-guide,.btn-copy-sm,.btn-tts { border-radius:10px!important; }
+        .chat-card { border-radius:22px!important; } .chat-box { background:rgba(2,6,23,.43)!important;border-radius:16px!important; }
+        .chat-msg { border-radius:16px!important; } .session-panel { background:rgba(2,6,23,.38)!important;border-radius:14px!important; }
+        .live-console,.queue-command { background:#020617!important;border:1px solid rgba(51,65,85,.75);border-radius:11px!important; }
+        @media(max-width:768px){ .sidebar{width:100%;} .main-content{margin-right:0;padding:14px;} .top-bar{align-items:flex-start;gap:12px;flex-direction:column;} }
+
     </style>
 </head>
 <body>
@@ -1700,13 +1806,17 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             <div class="brand-header">
                 <div class="brand-icon">🤖</div>
                 <div>
-                    <h3 style="margin:0; font-size:1rem; color:white;">PC Repair & AI Agent</h3>
-                    <small style="color:var(--text-muted); font-size:0.75rem;">دستیار هوشمند ۴۲ ابزاره ویندوز</small>
+                    <h3 style="margin:0; font-size:1rem; color:white;">PC Repair Pro</h3>
+                    <small style="color:var(--text-muted); font-size:0.75rem;">جعبه‌ابزار و دستیار AI</small>
                 </div>
             </div>
 
+            <button class="palette-trigger" onclick="openCommandPalette()">⌘ جستجو و فرمان سریع <span style="float:left;opacity:.65">Ctrl K</span></button>
             <div class="nav">
-                <a class="nav-link-custom active" onclick="switchMainTab('tools', this)">
+                <a class="nav-link-custom active" onclick="switchMainTab('overview', this)">
+                    <span>🏠 داشبورد</span>
+                </a>
+                <a class="nav-link-custom" onclick="switchMainTab('tools', this)">
                     <span>🌐 تمامی ابزارها (۴۲)</span>
                 </a>
                 <a class="nav-link-custom" onclick="switchMainTab('ai', this)">
@@ -1715,8 +1825,20 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 <a class="nav-link-custom" onclick="switchMainTab('gpu', this)">
                     <span>🎮</span> <span>کارت گرافیک</span>
                 </a>
+                <a class="nav-link-custom" onclick="switchMainTab('system', this)">
+                    <span>💻</span> <span>اطلاعات سیستم</span>
+                </a>
+                <a class="nav-link-custom" onclick="switchMainTab('security', this)">
+                    <span>🛡️</span> <span>مرکز امنیت</span>
+                </a>
+                <a class="nav-link-custom" onclick="switchMainTab('defender', this)">
+                    <span>🦠</span> <span>محافظت ویروس و تهدید</span>
+                </a>
                 <a class="nav-link-custom" onclick="switchMainTab('dev', this)">
                     <span>💻</span> <span>توسعه نرم‌افزار</span>
+                </a>
+                <a class="nav-link-custom" onclick="switchMainTab('queue', this)">
+                    <span>⚡ صف اجرای امن</span> <span id="queueNavCount" class="nav-count"></span>
                 </a>
                 <a class="nav-link-custom" onclick="switchMainTab('history', this)">
                     <span>📜 تاریخچه و لاگ‌ها</span>
@@ -1738,8 +1860,40 @@ EMBEDDED_HTML = """<!DOCTYPE html>
     <!-- Main Content Area -->
     <div class="main-content">
         
+
+        <!-- TAB: operational overview / Freebuff-inspired dashboard -->
+        <div id="tabOverviewView" class="tab-panel">
+          <section class="overview-hero">
+            <div style="position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+              <div><div style="font-size:1.45rem;font-weight:800;color:white">مرکز کنترل PC Repair Pro</div><p style="color:var(--text-muted);margin:7px 0 0;line-height:1.7">نمای سریع از سلامت ویندوز، ابزارهای تعمیر و دستیار هوشمند شما.</p></div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="btn-ai" onclick="refreshOverview()">↻ به‌روزرسانی وضعیت</button>
+                <button class="btn-ai" style="background:linear-gradient(135deg,#475569,#334155);position:relative;" onclick="openErrorConsole()" title="نمایش خطاهای ثبت‌شدهٔ برنامه (JS، شبکه، هشدارها)">
+                  🐞 خطاهای برنامه
+                  <span id="errBadge" style="display:none;position:absolute;top:-7px;left:-7px;background:#ef4444;color:#fff;font-size:0.62rem;font-weight:800;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;padding:0 4px;box-shadow:0 2px 6px rgba(0,0,0,.45);">0</span>
+                </button>
+              </div>
+            </div>
+          </section>
+          <section class="overview-metrics">
+            <div class="metric-card"><div class="metric-label">فضای آزاد درایو C</div><div id="overviewDisk" class="metric-value">—</div></div>
+            <div class="metric-card"><div class="metric-label">فایل‌های موقت</div><div id="overviewTemp" class="metric-value">—</div></div>
+            <div class="metric-card"><div class="metric-label">رویدادهای خطا</div><div id="overviewEvents" class="metric-value">—</div></div>
+            <div class="metric-card"><div class="metric-label">وضعیت عیب‌یابی</div><div id="overviewHealth" class="metric-value">آمادهٔ بررسی</div></div>
+          </section>
+          <section class="overview-grid">
+            <div class="ai-card"><h3 style="margin-top:0;color:white">شروع سریع</h3><div class="quick-grid">
+              <button class="quick-action" onclick="openOverviewTab('ai')">🤖 دستیار هوشمند<small>گفتگو، تحلیل و اجرای امن دستورها</small></button>
+              <button class="quick-action" onclick="runOverviewDiagnosis()">🔍 بررسی محلی<small>تحلیل فوری، آفلاین و بدون توکن</small></button>
+              <button class="quick-action" onclick="openOverviewTab('gpu')">🎮 مرکز گرافیک<small>درایور، دما، TDR و مصرف GPU</small></button>
+              <button class="quick-action" onclick="openOverviewTab('queue')">⚡ صف اجرای امن<small>مرور، تأیید و اجرای زنجیره‌ای</small></button>
+            </div></div>
+            <aside class="ai-card"><h3 style="margin-top:0;color:white">وضعیت بررسی</h3><div id="overviewFindings" style="color:var(--text-muted);line-height:1.9;font-size:.87rem">برای دریافت دادهٔ زنده، «به‌روزرسانی وضعیت» را بزنید.</div></aside>
+          </section>
+        </div>
+
         <!-- TAB 1: Tools View -->
-        <div id="tabToolsView" class="tab-panel">
+        <div id="tabToolsView" class="tab-panel" style="display:none;">
             <div class="top-bar">
                 <div>
                     <h2 style="margin:0; font-size:1.4rem; color:white;">جعبه ابزار تخصصی ویندوز</h2>
@@ -1884,6 +2038,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
+            <!-- کارت‌های خلاصه، الگو گرفته از GPU Center در Freebuff -->
+            <div id="gpuMetrics" class="center-grid" style="margin-top:0;"></div>
+            <div id="gpuLivePanels" class="ai-grid" style="margin-bottom:18px;"></div>
             <div id="gpuCards"></div>
 
             <div class="ai-card resizable" style="margin-bottom:20px;">
@@ -1908,6 +2065,68 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 <h3 style="color:white; margin-bottom:12px;">🤖 تحلیل هوشمند AI</h3>
                 <div id="gpuAiReply" style="color:var(--text-main); font-size:0.9rem; line-height:1.8;"></div>
             </div>
+        </div>
+
+
+        <!-- TAB: Freebuff-style execution queue, backed by real repair API -->
+        <div id="tabQueueView" class="tab-panel" style="display:none;">
+            <div class="top-bar">
+                <div><h2 style="margin:0; font-size:1.4rem; color:white;">⚡ صف اجرای امن</h2>
+                <small style="color:var(--text-muted);">دستورها ابتدا در صف دیده می‌شوند؛ سپس با تأیید شما در یک زنجیرهٔ واقعی اجرا می‌گردند.</small></div>
+            </div>
+            <div class="queue-shell">
+              <div><div id="commandQueueList" class="queue-list"></div></div>
+              <aside class="queue-side">
+                <h3 style="margin:0;color:white;font-size:1rem;">افزودن دستور</h3>
+                <p style="font-size:.78rem;color:var(--text-muted);line-height:1.7;">هر خط یک دستور. دستورات پیش از اجرا از دروازهٔ امنیتی عبور می‌کنند.</p>
+                <textarea id="queueCommandInput" class="queue-input" placeholder="ipconfig /flushdns
+sfc /scannow"></textarea>
+                <div class="queue-actions">
+                  <button class="queue-add" onclick="addQueueCommands()">+ افزودن به صف</button>
+                  <button class="queue-run" onclick="runQueuedCommands()">▶ اجرای صف</button>
+                  <button class="queue-clear" onclick="clearCommandQueue()">پاک‌کردن</button>
+                </div>
+                <div id="queueStatus" style="margin-top:12px;font-size:.8rem;color:var(--text-muted);"></div>
+              </aside>
+            </div>
+        </div>
+
+
+        <!-- TAB: System information -->
+        <div id="tabSystemView" class="tab-panel" style="display:none;">
+          <div class="top-bar"><div><h2 style="margin:0;color:white;font-size:1.4rem">💻 اطلاعات سیستم</h2><small style="color:var(--text-muted)">نمای زندهٔ اجزای ویندوز و سلامت پایهٔ سیستم</small></div><button class="btn-ai" onclick="refreshSystemCenter()">↻ اسکن سیستم</button></div>
+          <div class="center-grid">
+            <div class="center-card"><div class="cc-title">سیستم‌عامل</div><div id="sysOs" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">پردازنده</div><div id="sysCpu" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">حافظه</div><div id="sysRam" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">فضای درایو C</div><div id="sysDisk" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">وضعیت شبکه</div><div id="sysNetwork" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">رویدادهای اخیر</div><div id="sysEvents" class="cc-value">—</div></div>
+          </div>
+          <div class="center-report" id="sysDetails">برای خواندن دادهٔ زنده، «اسکن سیستم» را بزنید.</div>
+        </div>
+
+        <!-- TAB: Security gate overview -->
+        <div id="tabSecurityView" class="tab-panel" style="display:none;">
+          <div class="top-bar"><div><h2 style="margin:0;color:white;font-size:1.4rem">🛡️ مرکز امنیت</h2><small style="color:var(--text-muted)">وضعیت حفاظتی سیستم، دروازهٔ فرمان و آمادگی بازگشت</small></div><button class="btn-ai" style="background:linear-gradient(135deg,#059669,#047857)" onclick="refreshSecurityCenter()">↻ بررسی امنیت</button></div>
+          <div class="center-grid">
+            <div class="center-card"><div class="cc-title">Microsoft Defender</div><div id="secDefender" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">نیاز به ری‌استارت</div><div id="secReboot" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">درایورهای مشکل‌دار</div><div id="secDrivers" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">System Restore</div><div id="secRestore" class="cc-value">—</div></div>
+            <div class="center-card"><div class="cc-title">حفاظت دستورات</div><div class="cc-value state-good">فعال · سه‌لایه</div></div>
+            <div class="center-card"><div class="cc-title">کلید API</div><div id="secKeyProtection" class="cc-value">—</div></div>
+          </div>
+          <div class="center-report" id="secDetails">این صفحه فقط وضعیت را گزارش می‌کند؛ اجرای هر فرمان همچنان باید از دروازهٔ امنیتی و تأیید کاربر عبور کند.</div>
+        </div>
+
+        <!-- TAB: Microsoft Defender / Virus & Threat Protection -->
+        <div id="tabDefenderView" class="tab-panel" style="display:none;">
+          <div class="top-bar"><div><h2 style="margin:0;color:white;font-size:1.4rem">🛡 محافظت در برابر ویروس و تهدیدها</h2><small style="color:var(--text-muted)">وضعیت واقعی Microsoft Defender، تهدیدها، استثناها و اسکن کنترل‌شده</small></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn-ai" onclick="refreshDefender()">↻ بررسی وضعیت</button><button class="btn-ai" style="background:linear-gradient(135deg,#059669,#047857)" onclick="updateDefenderSignatures()">🔄 بروزرسانی دیتابیس</button><button class="btn-ai" style="background:linear-gradient(135deg,#7c3aed,#5b21b6)" onclick="analyzeDefenderWithAi()">🤖 تحلیل تهدیدها با AI</button></div></div>
+          <div id="defenderMetrics" class="center-grid"><div class="queue-empty" style="grid-column:1/-1">برای دریافت وضعیت، «بررسی وضعیت» را بزنید.</div></div>
+          <div class="ai-grid"><div class="ai-card"><h3 style="margin-top:0;color:white">اسکن Microsoft Defender</h3><p style="color:var(--text-muted);font-size:.82rem;line-height:1.8">اسکن سریع فایل‌های حساس سیستم را بررسی می‌کند. هیچ اسکن یا تغییری بدون تأیید شما شروع نمی‌شود.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn-ai" onclick="startDefenderScan('quick')">⚡ Quick Scan</button><button class="btn-copy-sm" onclick="startDefenderScan('full')">🔎 Full Scan</button></div><div id="defenderScanStatus" style="margin-top:12px;color:var(--text-muted);font-size:.8rem"></div></div><div class="ai-card"><h3 style="margin-top:0;color:white">تهدیدهای اخیر</h3><div id="defenderThreats" style="color:var(--text-muted);font-size:.82rem">—</div></div></div>
+          <div class="ai-card" style="margin-top:18px"><h3 style="margin-top:0;color:white">استثناهای Defender</h3><p style="color:var(--text-muted);font-size:.77rem">این صفحه فقط استثناها را بررسی می‌کند؛ حذف یا افزودن استثنا عمداً از این برنامه انجام نمی‌شود.</p><div id="defenderExclusions" style="color:var(--text-muted);font-size:.82rem">—</div></div>
+          <div class="ai-card" id="defenderAiCard" style="display:none;margin-top:18px"><h3 style="margin-top:0;color:white">🤖 تحلیل امنیتی AI</h3><div id="defenderAiReply" style="line-height:1.9;color:var(--text-main)"></div></div>
         </div>
 
         <!-- TAB: Software Development -->
@@ -2206,9 +2425,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                     <input type="text" id="settingBaseUrl" style="width:100%; padding:10px; background:var(--bg-sidebar); border:1px solid var(--border-color); color:white; border-radius:8px;" value="https://api.groq.com/openai/v1">
                 </div>
 
-                <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
-                    <button class="btn-ai" style="flex:1; min-width:200px; background:linear-gradient(135deg, #3b82f6, #1d4ed8);" onclick="fetchAvailableModels()">
+                <div style="display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; align-items:center;">
+                    <button class="btn-sm-ai" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8);" onclick="fetchAvailableModels()">
                         🔍 دریافت فهرست واقعی مدل‌ها
+                    </button>
+                    <button class="btn-sm-ai" id="btnProbeFree" style="background:linear-gradient(135deg, #059669, #047857);" onclick="probeFreeModels()">
+                        🧪 تست واقعی رایگان بودن
                     </button>
                     <button class="persona-pill" id="btnFreeOnly" onclick="toggleFreeOnly()">
                         🆓 فقط مدل‌های رایگان
@@ -2224,7 +2446,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                     <div class="model-combo" id="modelCombo">
                         <input type="text" id="settingModel"
                                style="width:100%; padding:10px; background:var(--bg-sidebar); border:1px solid var(--border-color); color:white; border-radius:8px; padding-left:34px; direction:ltr; text-align:left;"
-                               value="llama-3.3-70b-versatile"
+                               value="openai/gpt-oss-120b"
                                autocomplete="off" spellcheck="false"
                                placeholder="تایپ کنید تا مدل را جستجو کنید…"
                                oninput="onModelSearch()"
@@ -2235,7 +2457,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                         <div class="model-dropdown" id="modelDropdown" style="display:none;"></div>
                     </div>
                     <div style="color:var(--text-muted); font-size:0.73rem; margin-top:5px;">
-                        🔍 هنگام تایپ، مدل‌ها فیلتر می‌شوند · 🆓 رایگان · 💰 هزینه دارد — بر اساس قیمت اعلامی خود سرویس
+                        🆓✓ رایگانِ تأییدشده (تست واقعی) · 🆓؟ احتمالاً رایگان · 💰 هزینه دارد · ❔ در فهرست سرویس نیست
+                        · دکمهٔ 🧪 کنار هر مدل، همان مدل را جداگانه می‌سنجد
                     </div>
                 </div>
 
@@ -2268,9 +2491,10 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                            style="width:100%; padding:9px 12px; background:var(--bg-sidebar);
                                   border:1px solid var(--border-color); color:white; border-radius:8px;
                                   outline:none; direction:ltr; text-align:left; font-size:0.82rem;">
-                    <div style="color:var(--text-muted); font-size:0.74rem; margin-top:5px;">
-                        سایفون معمولاً: <span style="direction:ltr; display:inline-block;">socks5h://127.0.0.1:1080</span>
-                        · Hiddify: <span style="direction:ltr; display:inline-block;">socks5h://127.0.0.1:12334</span>
+                    <div style="color:var(--text-muted); font-size:0.74rem; margin-top:5px; line-height:1.8;">
+                        Psiphon در حالت VPN به پروکسی دستی نیازی ندارد — این کادر فقط برای حالت System Proxy یا ابزارهایی مثل
+                        Hiddify است: <span style="direction:ltr; display:inline-block;">socks5h://127.0.0.1:12334</span>
+                        · سایفون System Proxy: <span style="direction:ltr; display:inline-block;">http://127.0.0.1:پورت-سایفون</span>
                     </div>
                 </div>
 
@@ -2490,6 +2714,225 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             }
         })();
 
+        /* ═══════════════════════════════════════════════════════════
+           لاگ خطاهای برنامه — قابل دیدن از داشبورد
+           ───────────────────────────────────────────────────────────
+           در EXE کنسول مرورگر دیده نمی‌شود؛ خطاهای JS، Promiseهای
+           ردشده، console.error/warn و خطاهای شبکهٔ fetch اینجا جمع
+           می‌شوند (حداکثر ۳۰۰ مورد، ماندگار در localStorage) تا از
+           دکمهٔ «🐞 خطاهای برنامه» در داشبورد دیده و کپی شوند.
+           ═══════════════════════════════════════════════════════════ */
+        const PC_LOG_MAX = 300;
+        let pcErrorLog = [];
+        try {
+            pcErrorLog = JSON.parse(localStorage.getItem('pcErrorLog') || '[]');
+            if (!Array.isArray(pcErrorLog)) pcErrorLog = [];
+        } catch (e) { pcErrorLog = []; }
+
+        function pcLogSave() {
+            try { localStorage.setItem('pcErrorLog', JSON.stringify(pcErrorLog)); } catch (e) {}
+        }
+
+        function pushPcLog(kind, text, detail) {
+            try {
+                pcErrorLog.push({
+                    t: Date.now(), kind: kind,
+                    text: String(text || '').slice(0, 600),
+                    detail: String(detail || '').slice(0, 2500)
+                });
+                if (pcErrorLog.length > PC_LOG_MAX)
+                    pcErrorLog = pcErrorLog.slice(-PC_LOG_MAX);
+                pcLogSave();
+                updateErrBadge();
+            } catch (e) {}
+        }
+
+        function pcCountErrors() {
+            return pcErrorLog.filter(function (x) {
+                return x.kind === 'error' || x.kind === 'promise' || x.kind === 'network';
+            }).length;
+        }
+
+        function updateErrBadge() {
+            const b = document.getElementById('errBadge');
+            if (!b) return;
+            const n = pcCountErrors();
+            b.style.display = n ? 'inline-block' : 'none';
+            b.innerText = n > 99 ? '99+' : String(n);
+        }
+
+        /* ۱) خطاهای جاوااسکریپت */
+        window.addEventListener('error', function (e) {
+            let d = '';
+            try {
+                d = (e.filename || '') + ':' + (e.lineno || 0) + ':' + (e.colno || 0);
+                if (e.error && e.error.stack) d += '\\n' + e.error.stack;
+            } catch (x) {}
+            pushPcLog('error', e.message || 'خطای ناشناخته JS', d);
+        });
+
+        /* ۲) Promiseهای ردشده بدون مدیریت */
+        window.addEventListener('unhandledrejection', function (e) {
+            let d = '';
+            try {
+                const r = e.reason;
+                d = (r && r.stack) ? r.stack : String(r);
+            } catch (x) {}
+            pushPcLog('promise', 'Promise ردشده بدون مدیریت', d);
+        });
+
+        /* ۳) console.error / console.warn — بدون تغییر رفتار اصلی */
+        const _pcOrigErr = console.error, _pcOrigWarn = console.warn;
+        console.error = function () {
+            try {
+                const parts = [];
+                for (let i = 0; i < arguments.length; i++) {
+                    const a = arguments[i];
+                    parts.push(a && a.stack ? (String(a.message || a) + '\\n' + a.stack) : String(a));
+                }
+                pushPcLog('error', parts.join(' '), '');
+            } catch (e) {}
+            _pcOrigErr.apply(console, arguments);
+        };
+        console.warn = function () {
+            try {
+                const parts = [];
+                for (let i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+                pushPcLog('warn', parts.join(' '), '');
+            } catch (e) {}
+            _pcOrigWarn.apply(console, arguments);
+        };
+
+        /* ۴) خطاهای شبکهٔ fetch (قطعی اتصال + خطای ۵xx سرور) */
+        if (window.fetch) {
+            const _pcOrigFetch = window.fetch.bind(window);
+            window.fetch = function (input, init) {
+                return _pcOrigFetch(input, init)
+                    .then(function (res) {
+                        try {
+                            const url = typeof input === 'string' ? input : (input && input.url) || '';
+                            if (res.status >= 500 && url.indexOf('/api/') !== -1)
+                                pushPcLog('network', 'خطای سرور ' + res.status + ' — ' + url, '');
+                        } catch (e) {}
+                        return res;
+                    })
+                    .catch(function (err) {
+                        try {
+                            const url = typeof input === 'string' ? input : (input && input.url) || '';
+                            pushPcLog('network', 'اتصال برقرار نشد — ' + url,
+                                      (err && err.message) || String(err));
+                        } catch (e) {}
+                        throw err;
+                    });
+            };
+        }
+
+        /* ─── نمایشگر خطاها (از داشبورد) ─── */
+        function pcLogIcon(kind) {
+            return kind === 'error' ? '🔴' : kind === 'warn' ? '🟡'
+                 : kind === 'promise' ? '🟣' : '🌐';
+        }
+        function pcLogKindFa(kind) {
+            return kind === 'error' ? 'خطای JS' : kind === 'warn' ? 'هشدار'
+                 : kind === 'promise' ? 'Promise' : 'شبکه';
+        }
+        function pcLogTime(ts) {
+            const d = new Date(ts);
+            function p(x) { return (x < 10 ? '0' : '') + x; }
+            return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+        }
+
+        function closeErrorConsole() {
+            const ov = document.getElementById('pcErrOverlay');
+            if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+        }
+
+        function renderPcErrList(filter) {
+            const list = document.getElementById('pcErrList');
+            if (!list) return;
+            const items = pcErrorLog.slice().reverse()
+                .filter(function (x) {
+                    return filter === 'all' ? true : (filter === 'err'
+                        ? (x.kind !== 'warn') : (x.kind === 'warn'));
+                });
+            if (!items.length) {
+                list.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:40px 10px;">'
+                    + (pcErrorLog.length ? 'موردی با این فیلتر نیست.' : '🎉 خطایی ثبت نشده است.')
+                    + '</div>';
+                return;
+            }
+            let html = '';
+            items.forEach(function (x) {
+                html += '<div style="border:1px solid #1e293b;border-radius:9px;padding:9px 12px;margin-bottom:8px;background:rgba(15,23,42,.55);">'
+                    + '<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;">'
+                    + '<span style="direction:ltr;font-family:monospace;color:#64748b;font-size:0.72rem;">' + pcLogTime(x.t) + '</span>'
+                    + '<span>' + pcLogIcon(x.kind) + '</span>'
+                    + '<span style="color:#94a3b8;font-size:0.72rem;">' + pcLogKindFa(x.kind) + '</span>'
+                    + '<span style="color:#e2e8f0;font-size:0.82rem;flex:1;min-width:200px;word-break:break-word;">' + escHtml(x.text) + '</span>'
+                    + '</div>'
+                    + (x.detail ? '<pre style="direction:ltr;text-align:left;white-space:pre-wrap;word-break:break-word;margin:7px 0 0;padding:8px 10px;background:#020617;border-radius:7px;color:#7dd3fc;font-size:0.72rem;line-height:1.6;max-height:160px;overflow:auto;">' + escHtml(x.detail) + '</pre>' : '')
+                    + '</div>';
+            });
+            list.innerHTML = html;
+        }
+
+        function openErrorConsole() {
+            closeErrorConsole();
+            const ov = document.createElement('div');
+            ov.id = 'pcErrOverlay';
+            ov.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,.74);z-index:99999;display:flex;align-items:center;justify-content:center;padding:22px;';
+            ov.onclick = function (e) { if (e.target === ov) closeErrorConsole(); };
+
+            const box = document.createElement('div');
+            box.style.cssText = 'width:min(880px,96vw);max-height:86vh;display:flex;flex-direction:column;background:#0b1220;border:1px solid #1e293b;border-radius:14px;box-shadow:0 30px 80px rgba(0,0,0,.6);overflow:hidden;';
+            const errN = pcCountErrors(), warnN = pcErrorLog.length - errN;
+            box.innerHTML =
+                '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;border-bottom:1px solid #1e293b;flex-wrap:wrap;">'
+                + '<div style="font-weight:800;color:#fff;font-size:0.95rem;">🐞 خطاهای برنامه'
+                + '<span style="color:var(--text-muted);font-weight:400;font-size:0.76rem;"> — '
+                + errN + ' خطا · ' + warnN + ' هشدار (آخرین ' + PC_LOG_MAX + ' مورد)</span></div>'
+                + '<div style="display:flex;gap:7px;flex-wrap:wrap;">'
+                + '<button class="btn-copy-sm" id="pcErrFAll">همه</button>'
+                + '<button class="btn-copy-sm" id="pcErrFErr">فقط خطاها</button>'
+                + '<button class="btn-copy-sm" id="pcErrCopy">📋 کپی همه</button>'
+                + '<button class="btn-copy-sm" id="pcErrClear">🗑 پاک کردن</button>'
+                + '<button class="btn-copy-sm" id="pcErrClose">✕ بستن</button>'
+                + '</div></div>'
+                + '<div id="pcErrList" style="overflow:auto;padding:12px 14px;direction:rtl;"></div>'
+                + '<div style="padding:9px 16px;border-top:1px solid #1e293b;color:var(--text-muted);font-size:0.72rem;line-height:1.7;">'
+                + 'برای گزارش اشکال، «کپی همه» را بزنید و متن را برای توسعه‌دهنده بفرستید.</div>';
+            ov.appendChild(box);
+            document.body.appendChild(ov);
+
+            renderPcErrList('all');
+            document.getElementById('pcErrFAll').onclick = function () { renderPcErrList('all'); };
+            document.getElementById('pcErrFErr').onclick = function () { renderPcErrList('err'); };
+            document.getElementById('pcErrClose').onclick = closeErrorConsole;
+            document.getElementById('pcErrClear').onclick = function () {
+                askConfirm('🗑 پاک کردن لاگ خطاها',
+                    'همهٔ ' + pcErrorLog.length + ' مورد ثبت‌شده پاک می‌شود. ادامه می‌دهید؟',
+                    function () {
+                        pcErrorLog = [];
+                        pcLogSave();
+                        updateErrBadge();
+                        renderPcErrList('all');
+                    });
+            };
+            document.getElementById('pcErrCopy').onclick = function () {
+                let txt = 'PC Repair Toolbox — لاگ خطاها (' + new Date().toLocaleString('fa-IR') + ')\\n';
+                pcErrorLog.forEach(function (x) {
+                    txt += '[' + pcLogTime(x.t) + '] (' + pcLogKindFa(x.kind) + ') ' + x.text + '\\n';
+                    if (x.detail) txt += '    ' + x.detail.replace(/\\n/g, '\\n    ') + '\\n';
+                });
+                copyToClipboard(txt);
+                const b = document.getElementById('pcErrCopy');
+                b.innerText = '✓ کپی شد';
+                setTimeout(function () { b.innerText = '📋 کپی همه'; }, 1500);
+            };
+        }
+
+        updateErrBadge();
+
         const toolsData = [{"id": 1, "name_en": "Installed Apps", "name_fa": "برنامه‌های نصب‌شده", "category_en": "Apps & Features", "category_fa": "برنامه‌ها و قابلیت‌ها", "command": "start ms-settings:appsfeatures", "badge_admin": false, "badge_may_vary": false, "desc": "صفحه مدیریت برنامه‌ها و اپلیکیشن‌های جدید در تنظیمات مدرن ویندوز.", "guide": "۱. روی دکمه اجرای ابزار کلیک کنید تا تنظیمات Apps & Features ویندوز باز شود.\\n۲. از کادر جستجو برنامه مورد نظر خود را پیدا کنید.\\n۳. با کلیک روی منوی سه‌نقطه کنار هر برنامه، گزینه‌های Uninstall (حذف) یا Advanced Options (تعمیر و بازنشانی) را انتخاب کنید.", "warning": "برنامه‌های پایه سیستمی مایکروفرت را که با عملکرد ویندوز در ارتباط هستند حذف نکنید."}, {"id": 2, "name_en": "Default Apps", "name_fa": "برنامه‌های پیش‌فرض", "category_en": "Apps & Features", "category_fa": "برنامه‌ها و قابلیت‌ها", "command": "start ms-settings:defaultapps", "badge_admin": false, "badge_may_vary": false, "desc": "مدیریت برنامه‌های پیش‌فرض سیستم برای باز کردن انواع فایل‌ها و لینک‌ها.", "guide": "۱. پس از اجرای ابزار، مرورگر، برنامه ایمیل یا پلیر دلخواه را انتخاب کنید.\\n۲. می‌توانید پسوند فایل خاصی (مانند pdf. یا mp4.) را جستجو کرده و برنامه پیش‌فرض آن را تغییر دهید.", "warning": "تغییر برنامه‌های پیش‌فرض فایل‌های حساس سیستمی ممکن است نحوه اجرای آن‌ها را تغییر دهد."}, {"id": 3, "name_en": "Optional Features", "name_fa": "ویژگی‌های اختیاری", "category_en": "Apps & Features", "category_fa": "برنامه‌ها و قابلیت‌ها", "command": "start ms-settings:optionalfeatures", "badge_admin": false, "badge_may_vary": false, "desc": "افزودن یا حذف ویژگی‌های اختیاری و ابزارهای توسعه‌دهندگان ویندوز.", "guide": "۱. روی Add a feature کلیک کنید تا قابلیت‌های قابل دانلود نشان داده شوند.\\n۲. ویژگی‌هایی مانند OpenSSH Client، ابزارهای گرافیکی قدیمی یا زبان‌ها را انتخاب و نصب کنید.", "warning": "حذف ویژگی‌های جانبی ضروری ممکن است باعث کار نکردن برخی برنامه‌های تخصصی شود."}, {"id": 4, "name_en": "Programs and Features", "name_fa": "برنامه‌ها و قابلیت‌های کلاسیک", "category_en": "Apps & Features", "category_fa": "برنامه‌ها و قابلیت‌ها", "command": "appwiz.cpl", "badge_admin": false, "badge_may_vary": false, "desc": "محیط سنتّی و کلاسیک کنترل‌پنل برای مدیریت و حذف نرم‌افزارهای دسکتاپ.", "guide": "۱. پس از باز شدن پنجره، لیست نرم‌افزارها را مشاهده کنید.\\n۲. برنامه مورد نظر را انتخاب کرده و روی Uninstall/Change در بالای جدول کلیک کنید.\\n۳. از منوی سمت چپ می‌توانید View installed updates را برای مدیریت آپدیت‌ها انتخاب کنید.", "warning": "هنگام حذف درایورهای سخت‌افزاری و بسته‌های کدهای ++C دقت کنید."}, {"id": 5, "name_en": "Registry Editor", "name_fa": "ویرایشگر رجیستری (Regedit)", "category_en": "Advanced", "category_fa": "تنظیمات پیشرفته سیستم", "command": "regedit.exe", "badge_admin": true, "badge_may_vary": false, "desc": "پایگاه داده مرکزی تنظیمات پیکربندی پایه‌ای ویندوز و نرم‌افزارها.", "guide": "۱. با دسترسی Admin ویرایشگر را باز کنید.\\n۲. در درخت سمت چپ کلیدهای HKEY_LOCAL_MACHINE یا HKEY_CURRENT_USER را باز کنید.\\n۳. قبل از هر ویرایش، از منوی File گزینه Export را بزنید تا فایل پشتیبان reg. ساخته شود.", "warning": "هشدار بسیار مهم: ویرایش یا حذف اشتباه کلیدهای رجیستری می‌تواند باعث خرابی و بالانیامدن ویندوز شود!"}, {"id": 6, "name_en": "Local Group Policy", "name_fa": "ویرایشگر پالیسی محلی (Group Policy)", "category_en": "Advanced", "category_fa": "تنظیمات پیشرفته سیستم", "command": "gpedit.msc", "badge_admin": true, "badge_may_vary": true, "desc": "مدیریت سیاست‌های امنیتی، دسترسی کاربران و تنظیمات گروهی سیستم.", "guide": "۱. ابزار را باز کرده و به بخش Computer Configuration یا User Configuration بروید.\\n۲. گزینه‌های Administrative Templates را جهت تنظیم سیاست‌های اپلیکیشن‌ها و سیستم ویرایش کنید.\\n۳. روی هر پالیسی دابل کلیک کرده و حالت Enabled یا Disabled را تعیین کنید.", "warning": "این ابزار به‌صورت پیش‌فرض فقط در نسخه Windows Pro / Enterprise فعال است. در نسخه Home نیازمند فعال‌سازی دستی است."}, {"id": 7, "name_en": "Advanced System Properties", "name_fa": "تنظیمات پیشرفته سیستم", "category_en": "Advanced", "category_fa": "تنظیمات پیشرفته سیستم", "command": "sysdm.cpl", "badge_admin": false, "badge_may_vary": false, "desc": "پنجره تنظیمات پیشرفته ویندوز شامل عملکرد، متغیرهای محیطی و System Restore.", "guide": "۱. تب Advanced را انتخاب کنید.\\n۲. در بخش Performance روی Settings کلیک کنید تا افکت‌ها و حافظه مجازی (Virtual Memory) را تنظیم کنید.\\n۳. دکمه Environment Variables برای تنظیم متغیرهای سیستمی مانند PATH استفاده می‌شود.", "warning": "حذف یا تغییر اشتباه متغیرهای PATH باعث عدم شناسایی دستورات در ترمینال می‌شود."}, {"id": 8, "name_en": "Windows Security", "name_fa": "امنیت ویندوز (Microsoft Defender)", "category_en": "Security", "category_fa": "امنیت و دسترسی‌ها", "command": "start windowsdefender:", "badge_admin": false, "badge_may_vary": false, "desc": "مرکز جامع مدیریت امنیت، آنتی‌ویروس و دیواره آتش ویندوز.", "guide": "۱. بخش Virus & threat protection را باز کنید.\\n۲. روی Quick scan یا Full scan جهت اسکن سیستم کلیک کنید.\\n۳. در صورت نیاز به غیرفعال‌سازی موقت محافظت زنده، به Manage settings بروید.", "warning": "خاموش ماندن طولانی‌مدت Real-time protection سیستم شما را در معرض تهدید بدافزارها قرار می‌دهد."}, {"id": 9, "name_en": "Firewall Advanced", "name_fa": "فایروال پیشرفته ویندوز", "category_en": "Security", "category_fa": "امنیت و دسترسی‌ها", "command": "wf.msc", "badge_admin": true, "badge_may_vary": false, "desc": "مدیریت دقیق قوانین ورود و خروج ترافیک شبکه برای برنامه‌ها و پورت‌ها.", "guide": "۱. از پنل سمت چپ Inbound Rules (ترافیک ورودی) یا Outbound Rules (ترافیک خروجی) را انتخاب کنید.\\n۲. با زدن New Rule می‌توانید دسترسی یک برنامه یا پورت TCP/UDP خاص به شبکه را مسدود یا مجاز کنید.", "warning": "مسدود کردن اشتباه پورت‌های سیستمی باعث قطعی ارتباط اینترنت یا سرویس‌های آنلاین می‌شود."}, {"id": 10, "name_en": "BitLocker", "name_fa": "رمزگذاری درایوها (BitLocker)", "category_en": "Security", "category_fa": "امنیت و دسترسی‌ها", "command": "control /name Microsoft.BitLockerDriveEncryption", "badge_admin": true, "badge_may_vary": true, "desc": "ابزار رمزنگاری پیشرفته درایوهای هارد دیسک و حافظه‌های جانبی.", "guide": "۱. درایو مورد نظر را انتخاب کرده و Turn on BitLocker را بزنید.\\n۲. یک رمز عبور قوی تعیین کنید.\\n۳. فایل کلید بازیابی (Recovery Key) را حتماً در یک فلش یا اکانت مایکروسافت ذخیره کنید.", "warning": "هشدار: در صورت فراموشی رمز و گم شدن کلید بازیابی، اطلاعات درایو به هیچ وجه قابل بازگردانی نخواهد بود!"}, {"id": 11, "name_en": "User Account Control", "name_fa": "کنترل حساب کاربر (UAC)", "category_en": "Security", "category_fa": "امنیت و دسترسی‌ها", "command": "UserAccountControlSettings.exe", "badge_admin": true, "badge_may_vary": false, "desc": "تنظیم سطح هشدارهای امنیتی هنگام تغییرات سیستمی و اجرای برنامه‌ها.", "guide": "۱. اسلایدر را بین ۴ سطح تغییر دهید.\\n۲. سطح دوم (پیش‌فرض) بهترین تعادل را میان امنیت و راحتی کار ایجاد می‌کند.\\n۳. روی OK کلیک کنید تا تغییرات اعمال شود.", "warning": "قراردادن اسلایدر روی سطح پایین (Never Notify) امنیت سیستم را به شدت کاهش می‌دهد."}, {"id": 12, "name_en": "Device Manager", "name_fa": "مدیریت دستگاه‌ها (Device Manager)", "category_en": "System Tools", "category_fa": "ابزارهای مدیریتی سیستم", "command": "devmgmt.msc", "badge_admin": true, "badge_may_vary": false, "desc": "مشاهده سخت‌افزارهای نصب‌شده، مدیریت درایورها و عیب‌یابی قطعات.", "guide": "۱. شاخه قطعه مورد نظر (مانند Display adapters یا Network adapters) را باز کنید.\\n۲. روی درایور راست‌کلیک کرده و Update driver یا Uninstall device را بزنید.\\n۳. علامت تعجب زرد رنگ نشان‌دهنده نصب نبودن صحیح درایور است.", "warning": "غیرفعال کردن قطعات حیاتی ممکن است عملکرد ورودی/خروجی سیستم را مختل کند."}, {"id": 13, "name_en": "Services", "name_fa": "سرویس‌های ویندوز (Services)", "category_en": "System Tools", "category_fa": "ابزارهای مدیریتی سیستم", "command": "services.msc", "badge_admin": true, "badge_may_vary": false, "desc": "مدیریت سرویس‌های پس‌زمینه ویندوز و کنترل وضعیت اجرای آن‌ها.", "guide": "۱. سرویس مورد نظر را در جدول پیدا کنید.\\n۲. روی آن دابل‌کلیک کرده و Startup type را روی Automatic، Manual یا Disabled تنظیم کنید.\\n۳. با دکمه‌های Start و Stop می‌توانید سرویس را در لحظه کنترل کنید.", "warning": "غیرفعال کردن سرویس‌های پایه ویندوز ممکن است باعث اختلال در کل سیستم‌عامل شود."}, {"id": 14, "name_en": "Event Viewer", "name_fa": "نمایش‌دهنده رویدادها (Event Viewer)", "category_en": "System Tools", "category_fa": "ابزارهای مدیریتی سیستم", "command": "eventvwr.msc", "badge_admin": true, "badge_may_vary": false, "desc": "ابزار تحلیل و مشاهده گزارش‌های خطا و رویدادهای سیستم‌عامل.", "guide": "۱. از پنل سمت چپ مسیر Windows Logs -> System یا Application را انتخاب کنید.\\n۲. خطاهایی که آیکون قرمز رنگ دارند را بررسی کرده و کد Event ID آن‌ها را مشاهده کنید.\\n۳. برای عیب‌یابی کرش‌ها و کرش‌های ناگهانی بهترین ابزار است.", "warning": "برخی هشدارهای زرد و خطاهای غیرتکراری طبیعی هستند و نیازی به دستکاری ندارند."}, {"id": 15, "name_en": "Disk Management", "name_fa": "مدیریت دیسک و پارتیشن‌ها", "category_en": "System Tools", "category_fa": "ابزارهای مدیریتی سیستم", "command": "diskmgmt.msc", "badge_admin": true, "badge_may_vary": false, "desc": "پارتیشن‌بندی، فرمت دیسک و تغییر حروف درایورها.", "guide": "۱. روی پارتیشن مورد نظر راست‌کلیک کنید.\\n۲. برای کم کردن حجم Shrink Volume و برای افزودن حجم Extend Volume را بزنید.\\n۳. گزینه Format برای پاک‌سازی کامل درایو استفاده می‌شود.", "warning": "حذف پارتیشن یا فرمت کردن، تمامی اطلاعات موجود روی آن درایو را پاک می‌کند!"}, {"id": 16, "name_en": "System Information", "name_fa": "اطلاعات کامل سیستم (Msinfo32)", "category_en": "System Tools", "category_fa": "ابزارهای مدیریتی سیستم", "command": "msinfo32.exe", "badge_admin": false, "badge_may_vary": false, "desc": "مشاهده جزئیات کامل سخت‌افزار، نسخه BIOS، مدل مادربورد و سیستم‌عامل.", "guide": "۱. ابزار را باز کرده و بخش System Summary را مطالعه کنید.\\n۲. مشخصات پردازنده، میزان رم، حالت BIOS (UEFI/Legacy) و نسخه دقیق ویندوز درج شده است.\\n۳. می‌توانید مشخصات را در یک فایل متنی خروجی بگیرید.", "warning": "این ابزار صرفاً جهت اطلاع‌رسانی است و تغییری در سیستم ایجاد نمی‌کند."}, {"id": 17, "name_en": "Control Panel", "name_fa": "کنترل پنل کلاسیک", "category_en": "System Tools", "category_fa": "ابزارهای مدیریتی سیستم", "command": "control.exe", "badge_admin": false, "badge_may_vary": false, "desc": "دسترسی یک‌جا به تمامی ابزارها و تنظیمات سنتّی و قدیمی ویندوز.", "guide": "۱. پس از باز شدن، در بالا سمت راست View by را روی Small icons بگذارید.\\n۲. به بیش از ۳۰ ابزار مدیریتی و تنظیمات سیستم دسترسی مستقیم خواهید داشت.", "warning": "تنظیمات سیستمی را تنها در صورت داشتن آگاهی تغییر دهید."}, {"id": 18, "name_en": "Startup Apps", "name_fa": "برنامه‌های استارت‌آپ", "category_en": "Performance", "category_fa": "ارتقا و پایش عملکرد", "command": "start ms-settings:startup", "badge_admin": false, "badge_may_vary": false, "desc": "مدیریت برنامه‌هایی که هنگام روشن شدن ویندوز خودکار اجرا می‌شوند.", "guide": "۱. لیست برنامه‌های استارت‌آپ را مرور کنید.\\n۲. سوئیچ برنامه‌های غیرضروری (مانند آپدیترها یا پیام‌رسان‌ها) را Off کنید تا سرعت بوت زیاد شود.", "warning": "برنامه‌های امنیتی و درایورهای اصلی را غیرفعال نکنید."}, {"id": 19, "name_en": "Task Manager", "name_fa": "مدیریت وظایف (Task Manager)", "category_en": "Performance", "category_fa": "ارتقا و پایش عملکرد", "command": "taskmgr.exe", "badge_admin": false, "badge_may_vary": false, "desc": "پایش مصرف منابع، بستن برنامه‌های هنگ‌کرده و مدیریت پردازش‌ها.", "guide": "۱. کلیدهای Ctrl + Shift + Esc را بزنید یا روی دکمه کلیک کنید.\\n۲. برنامه‌های پرمصرف در بخش CPU یا Memory را پیدا کنید.\\n۳. روی برنامه هنگ‌کرده راست‌کلیک کرده و End task را بزنید.", "warning": "پردازش‌های پایه سیستمی ویندوز مانند Windows Explorer را نبندید."}, {"id": 20, "name_en": "Power Options", "name_fa": "تنظیمات مصرف انرژی (Power Options)", "category_en": "Performance", "category_fa": "ارتقا و پایش عملکرد", "command": "powercfg.cpl", "badge_admin": false, "badge_may_vary": false, "desc": "تنظیم پلن‌های مصرف انرژی برای کارایی بالاتر یا ذخیره باتری.", "guide": "۱. یکی از طرح‌های High Performance یا Balanced را انتخاب کنید.\\n۲. با کلیک روی Change plan settings زمان خاموش شدن صفحه و Sleep را تنظیم کنید.", "warning": "حالت High Performance مصرف باتری لپ‌تاپ را افزایش می‌دهد."}, {"id": 21, "name_en": "Visual Effects", "name_fa": "افکت‌های بصری و جلوه‌های گرافیکی", "category_en": "Performance", "category_fa": "ارتقا و پایش عملکرد", "command": "SystemPropertiesPerformance.exe", "badge_admin": false, "badge_may_vary": false, "desc": "بهینه‌سازی انیمیشن‌ها و جلوه‌های تصویری ویندوز برای افزایش سرعت.", "guide": "۱. برای سیستم‌های ضعیف گزینه Adjust for best performance را علامت بزنید.\\n۲. این کار تمام انیمیشن‌های اضافی را خاموش کرده و سرعت پنجره‌ها را بسیار بالا می‌برد.", "warning": "ظاهر گرافیکی پنجره‌ها کمی ساده‌تر و بدون انیمیشن خواهد شد."}, {"id": 22, "name_en": "Resource Monitor", "name_fa": "پایش دقیق منابع (Resource Monitor)", "category_en": "Performance", "category_fa": "ارتقا و پایش عملکرد", "command": "resmon.exe", "badge_admin": true, "badge_may_vary": false, "desc": "تحلیل بسیار جزئی و لحظه‌ای از مصرف CPU، RAM، دیسک و شبکه.", "guide": "۱. تب Disk را باز کنید تا ببینید کدام برنامه در حال خواندن/نوشتن هارد است.\\n۲. در تب Network مصرف پهنای باند هر برنامه را آنلاین بررسی کنید.", "warning": "این ابزار تخصصی پایش است؛ برای بستن برنامه‌ها Task Manager پیشنهاد می‌شود."}, {"id": 23, "name_en": "SFC Scan", "name_fa": "اسکن و تعمیر فایل‌های سیستمی (SFC)", "category_en": "Repair Windows", "category_fa": "تعمیر و بازگردانی ویندوز", "command": "cmd.exe /k sfc /scannow", "badge_admin": true, "badge_may_vary": false, "desc": "اسکن جامع و جایگزینی خودکار فایل‌های سیستمی آسیب‌دیده ویندوز.", "guide": "۱. دکمه اجرا را بزنید تا ترمینال با دسترسی Admin باز شود.\\n۲. منتظر بمانید درصد اسکن به ۱۰۰٪ برسد.\\n۳. در صورت یافتن فایل خراب، ویندوز خودکار آن را جایگزین می‌کند.", "warning": "تا پایان فرآیند پنجره مشکی ترمینال را نبندید."}, {"id": 24, "name_en": "DISM RestoreHealth", "name_fa": "تعمیر ایمیج ویندوز (DISM)", "category_en": "Repair Windows", "category_fa": "تعمیر و بازگردانی ویندوز", "command": "cmd.exe /k DISM /Online /Cleanup-Image /RestoreHealth", "badge_admin": true, "badge_may_vary": false, "desc": "بازسازی و تعمیر مخزن اصلی فایل‌های ویندوز (Component Store).", "guide": "۱. ابزار را اجرا کنید.\\n۲. این فرآیند حدود ۱۰ الی ۲۰ دقیقه طول می‌کشد و فایل‌های سالم را دانلود می‌کند.\\n۳. پس از پایان، پیام Restoration operation completed successfully ظاهر می‌شود.", "warning": "نیازمند اتصال پایدار اینترنت برای دانلود فایل‌های سلامتی ویندوز است."}, {"id": 25, "name_en": "Full Windows Repair", "name_fa": "تعمیر کامل و ترکیبی ویندوز", "category_en": "Repair Windows", "category_fa": "تعمیر و بازگردانی ویندوز", "command": "cmd.exe /k sfc /scannow && DISM /Online /Cleanup-Image /RestoreHealth", "badge_admin": true, "badge_may_vary": false, "desc": "اجرای متوالی دو دستور SFC و DISM برای عیب‌یابی و تعمیر کامل.", "guide": "۱. این گزینه ابتدا اسکن SFC را انجام داده و بلافاصله DISM را اجرا می‌کند.\\n۲. کامل‌ترین راهکار عیب‌یابی نرم‌افزاری ویندوز بدون نیاز به نصب مجدد است.", "warning": "زمان‌بر است؛ تا پایان کامل پردازش صبور باشید."}, {"id": 26, "name_en": "Windows Update", "name_fa": "آپدیت ویندوز (Windows Update)", "category_en": "Repair Windows", "category_fa": "تعمیر و بازگردانی ویندوز", "command": "start ms-settings:windowsupdate", "badge_admin": false, "badge_may_vary": false, "desc": "بررسی و دریافت آخرین پچ‌های امنیتی و بروزرسانی‌های سیستم‌عامل.", "guide": "۱. روی دکمه Check for updates کلیک کنید.\\n۲. آپدیت‌ها دانلود و نصب می‌شوند.\\n۳. در صورت نیاز سیستم را ریستارت کنید.", "warning": "موقع نصب آپدیت‌ها سیستم را خاموش نکنید."}, {"id": 27, "name_en": "Create Restore Point", "name_fa": "ایجاد نقطه بازگردانی (Restore Point)", "category_en": "Repair Windows", "category_fa": "تعمیر و بازگردانی ویندوز", "command": "SystemPropertiesProtection.exe", "badge_admin": true, "badge_may_vary": false, "desc": "ذخیره وضعیت فعلی فایل‌های سیستمی جهت بازگردانی در صورت بروز مشکل.", "guide": "۱. درایو C را انتخاب کنید.\\n۲. روی دکمه Create کلیک کرده و یک نام توضیحی بنویسید.\\n۳. روی Create کلیک کنید تا نسخه پشتیبان سیستمی ساخته شود.", "warning": "نقطه بازگردانی فقط از فایل‌های سیستمی بک‌آپ می‌گیرد، نه فایل‌های شخصی شما."}, {"id": 28, "name_en": "System Restore", "name_fa": "بازیابی سیستم (System Restore)", "category_en": "Repair Windows", "category_fa": "تعمیر و بازگردانی ویندوز", "command": "rstrui.exe", "badge_admin": true, "badge_may_vary": false, "desc": "بازگرداندن فایل‌ها و تنظیمات ویندوز به تاریخ نقاط بازگردانی قبلی.", "guide": "۱. ابزار را اجرا کرده و Next را بزنید.\\n۲. تاریخی که سیستم در آن وضعیت سالم داشته را انتخاب کنید.\\n۳. فرآیند بازگردانی را تایید کنید تا سیستم ریستارت شود.", "warning": "تغییرات نرم‌افزاری ایجادشده بعد از آن تاریخ لغو خواهند شد."}, {"id": 29, "name_en": "Fix Internet", "name_fa": "تعمیر هوشمند قطعی اینترنت", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "cmd.exe /k ipconfig /flushdns && ipconfig /release && ipconfig /renew && netsh winsock reset", "badge_admin": true, "badge_may_vary": false, "desc": "اسکریپت همه‌جانبه برای رفع اکثر اختلالات و قطعی‌های شبکه و اینترنت.", "guide": "۱. با زدن دکمه، دستورات پاک‌سازی کش DNS، تمدید IP و بازنشانی Winsock اجرا می‌شوند.\\n۲. پس از اتمام، سیستم را ریستارت کنید تا اتصال کامل برقرار شود.", "warning": "اتصال اینترنت برای چند ثانیه قطع شده و مجددا وصل می‌شود."}, {"id": 30, "name_en": "Flush DNS", "name_fa": "پاک‌سازی کش دی‌ان‌اس (Flush DNS)", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "cmd.exe /k ipconfig /flushdns", "badge_admin": true, "badge_may_vary": false, "desc": "تخلیه حافظه موقت DNS جهت حل مشکل باز نشدن صفحات وب.", "guide": "۱. دکمه را بزنید تا دستور اجرا شود.\\n۲. پیام Successfully flushed the DNS Resolver Cache ظاهر می‌شود.\\n۳. مرورگر را رفرش کنید.", "warning": "کاملاً ایمن است و هیچ مشکلی ایجاد نمی‌کند."}, {"id": 31, "name_en": "Reset Winsock", "name_fa": "بازنشانی پروتکل شبکه (Reset Winsock)", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "cmd.exe /k netsh winsock reset", "badge_admin": true, "badge_may_vary": false, "desc": "تعمیر و بازسازی کاتالوگ ارتباطی Winsock شبکه ویندوز.", "guide": "۱. ابزار را اجرا کنید.\\n۲. پس از مشاهده پیام موفقیت، سیستم را ریستارت کنید.", "warning": "تنظیمات سفارشی برخی برنامه‌های پروکسی یا VPN پاک می‌شود."}, {"id": 32, "name_en": "Renew IP Address", "name_fa": "تمدید آدرس IP", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "cmd.exe /k ipconfig /release && ipconfig /renew", "badge_admin": true, "badge_may_vary": false, "desc": "رهاسازی و دریافت مجدد آدرس IP از مودم (DHCP).", "guide": "۱. اجرای ابزار باعث قطع لحظه‌ای IP فعلی و در خواست IP جدید می‌شود.\\n۲. رفع خطاهای تداخل آدرس IP (IP Conflict).", "warning": "برای چند ثانیه شبکه قطع می‌شود."}, {"id": 33, "name_en": "Network Connections", "name_fa": "مدیریت کارت‌های شبکه (NCPA)", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "ncpa.cpl", "badge_admin": false, "badge_may_vary": false, "desc": "مشاهده و تنظیم کارت‌های شبکه Wi-Fi و LAN.", "guide": "۱. روی کارت شبکه مورد نظر راست‌کلیک کنید.\\n۲. گزینه‌های Disable/Enable یا Properties (جهت تنظیم ست کردن DNS یا IP دستی) را استفاده کنید.", "warning": "غیرفعال کردن کارت شبکه ارتباط شما را قطع می‌کند."}, {"id": 34, "name_en": "Network Status", "name_fa": "وضعیت شبکه و مصرف حجم", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "start ms-settings:network-status", "badge_admin": false, "badge_may_vary": false, "desc": "مشاهده وضعیت اتصال اینترنت و میزان مصرف داده برنامه‌ها.", "guide": "۱. وضعیت سلامت اتصال را بررسی کنید.\\n۲. بخش Data usage میزان مصرف حجم اینترنت هر نرم‌افزار را نشان می‌دهد.", "warning": "این بخش صرفاً نمایشی است."}, {"id": 35, "name_en": "Proxy Settings", "name_fa": "تنظیمات پروکسی سیستم", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "start ms-settings:network-proxy", "badge_admin": false, "badge_may_vary": false, "desc": "مدیریت پروکسی‌های سیستمی جهت حل مشکل قطعی سایت‌ها.", "guide": "۱. در صورت باز نشدن سایت‌ها، بررسی کنید که گزینه Use a proxy server خاموش باشد.\\n۲. در صورت نیاز به پروکسی خاص، آدرس و پورت را وارد کنید.", "warning": "پروکسی روشن و نامعتبر باعث قطع دسترسی مرورگرها به اینترنت می‌شود."}, {"id": 36, "name_en": "Windows Firewall", "name_fa": "فایروال ویندوز (Firewall)", "category_en": "Network", "category_fa": "شبکه و اینترنت", "command": "firewall.cpl", "badge_admin": false, "badge_may_vary": false, "desc": "پنجره اصلی دیواره آتش ویندوز برای مدیریت دسترسی‌ها.", "guide": "۱. جهت اجازه دادن به یک برنامه، روی Allow an app or feature... کلیک کنید.\\n۲. می‌توانید فایروال را روشن یا خاموش کنید.", "warning": "خاموش کردن فایروال سیستم را در برابر حملات شبکه‌ای آسیب‌پذیر می‌کند."}, {"id": 37, "name_en": "Clean Temporary Files", "name_fa": "پاک‌سازی فایل‌های موقت", "category_en": "Clean & Storage", "category_fa": "پاک‌سازی و مدیریت حافظه", "command": "start ms-settings:storagesense", "badge_admin": false, "badge_may_vary": false, "desc": "حذف ایمن فایل‌های اضافی Temp بدون آسیب به اطلاعات شخصی.", "guide": "۱. ابزار را باز کرده و آیتم‌های موقت را انتخاب کنید.\\n۲. دکمه Remove files را برای آزادسازی گیگابایت‌ها فضا بزنید.", "warning": "پوشه Downloads را مگر در صورت عدم نیاز علامت نزنید."}, {"id": 38, "name_en": "Disk Cleanup", "name_fa": "پاک‌سازی دیسک (Disk Cleanup)", "category_en": "Clean & Storage", "category_fa": "پاک‌سازی و مدیریت حافظه", "command": "cleanmgr.exe", "badge_admin": false, "badge_may_vary": false, "desc": "ابزار کلاسیک پاک‌سازی دیسک و فایل‌های آپدیت قبلی ویندوز.", "guide": "۱. درایو C را انتخاب و OK بزنید.\\n۲. مربع‌های مورد نظر را علامت بزنید.\\n۳. برای پاک‌سازی فایل‌های سیستمی قدیمی روی Clean up system files کلیک کنید.", "warning": "پاک کردن فایل‌های آپدیت قدیمی امکان دانگرید را از بین می‌برد."}, {"id": 39, "name_en": "Storage Settings", "name_fa": "تنظیمات فضای ذخیره‌سازی", "category_en": "Clean & Storage", "category_fa": "پاک‌سازی و مدیریت حافظه", "command": "start ms-settings:storage", "badge_admin": false, "badge_may_vary": false, "desc": "آنالیز گرافیکی حجم اشغال‌شده توسط عکس‌ها، برنامه‌ها و فایل‌ها.", "guide": "۱. دسته‌بندی پرحجم را باز کنید.\\n۲. فایل‌های بلااستفاده را شناسایی و مدیریت کنید.", "warning": "قبل از حذف فایل‌ها مطمئن شوید نیازی به آن‌ها ندارید."}, {"id": 40, "name_en": "Storage Sense", "name_fa": "حسگر هوشمند حافظه (Storage Sense)", "category_en": "Clean & Storage", "category_fa": "پاک‌سازی و مدیریت حافظه", "command": "start ms-settings:storagesense", "badge_admin": false, "badge_may_vary": false, "desc": "پاک‌سازی خودکار و زمان‌بندی‌شده فایل‌های موقت و سطل زباله.", "guide": "۱. کلید Storage Sense را روی On بگذارید.\\n۲. زمان‌بندی (هفتگی یا ماهانه) را انتخاب کنید تا ویندوز خودکار دیسک را تمیز نگه دارد.", "warning": "کاملاً ایمن و مفید است."}, {"id": 41, "name_en": "Temp Folder", "name_fa": "پوشه فایل‌های موقت (%temp%)", "category_en": "Clean & Storage", "category_fa": "پاک‌سازی و مدیریت حافظه", "command": "explorer.exe %temp%", "badge_admin": false, "badge_may_vary": false, "desc": "باز کردن مستقیم پوشه فایل‌های موقت کاربر در File Explorer.", "guide": "۱. کلیدهای Ctrl + A را بزنید تا همه انتخاب شوند.\\n۲. کلید Shift + Delete را بزنید تا حجم هارد آزاد شود.\\n۳. اگر پیامی داد که فایلی در حال استفاده است گزینه‌ی Skip را انتخاب کنید.", "warning": "فایل‌های در حال استفاده پاک نخواهند شد."}, {"id": 42, "name_en": "Recycle Bin", "name_fa": "سطل بازیافت (Recycle Bin)", "category_en": "Clean & Storage", "category_fa": "پاک‌سازی و مدیریت حافظه", "command": "explorer.exe shell:RecycleBinFolder", "badge_admin": false, "badge_may_vary": false, "desc": "باز کردن سطل زباله ویندوز جهت خالی‌سازی یا بازیابی فایل‌ها.", "guide": "۱. فایل‌هایی که اشتباهاً حذف شده‌اند را Restore کنید.\\n۲. برای آزادسازی کامل حجم روی Empty Recycle Bin کلیک کنید.", "warning": "پس از تخلیه سطل زباله، بازیابی نیازمند نرم‌افزارهای ریکاوری تخصصی خواهد بود."}, {"id": 43, "name_en": "DirectX Diagnostic", "name_fa": "عیب‌یابی دایرکت‌ایکس (DxDiag)", "category_en": "Graphics", "category_fa": "کارت گرافیک و نمایش", "command": "dxdiag.exe", "badge_admin": false, "badge_may_vary": false, "desc": "گزارش کامل کارت گرافیک، نسخه DirectX، درایور و تست‌های سخت‌افزاری.", "guide": "۱. تب Display را باز کنید تا نام کارت، حافظه و نسخه درایور را ببینید.\\n۲. بخش Notes پایین صفحه، مشکلات شناسایی‌شده را نشان می‌دهد.\\n۳. با Save All Information گزارش را در فایل متنی ذخیره کنید.", "warning": "این ابزار فقط گزارش می‌دهد و تغییری در سیستم ایجاد نمی‌کند."}, {"id": 44, "name_en": "Display Adapters", "name_fa": "مدیریت درایور کارت گرافیک", "category_en": "Graphics", "category_fa": "کارت گرافیک و نمایش", "command": "devmgmt.msc", "badge_admin": true, "badge_may_vary": false, "desc": "مشاهده و مدیریت درایور کارت‌های گرافیک مجتمع و مجزا.", "guide": "۱. شاخه Display adapters را باز کنید.\\n۲. روی کارت راست‌کلیک و Update driver یا Uninstall device را بزنید.\\n۳. علامت تعجب زرد یعنی درایور مشکل دارد.", "warning": "حذف درایور باعث افت موقت رزولوشن تا نصب مجدد می‌شود."}, {"id": 45, "name_en": "Graphics Settings", "name_fa": "تنظیمات گرافیک برنامه‌ها", "category_en": "Graphics", "category_fa": "کارت گرافیک و نمایش", "command": "start ms-settings:display-advancedgraphics", "badge_admin": false, "badge_may_vary": true, "desc": "انتخاب کارت گرافیک برای هر برنامه در سیستم‌های دو-گرافیکی (Hybrid).", "guide": "۱. برنامه مورد نظر را با Browse اضافه کنید.\\n۲. Options را بزنید و High performance را انتخاب کنید تا روی کارت مجزا اجرا شود.\\n۳. برای صرفه‌جویی باتری Power saving را بزنید.", "warning": "در برخی نسخه‌های ویندوز مسیر این صفحه متفاوت است."}, {"id": 46, "name_en": "Display Settings", "name_fa": "تنظیمات نمایشگر و رزولوشن", "category_en": "Graphics", "category_fa": "کارت گرافیک و نمایش", "command": "start ms-settings:display", "badge_admin": false, "badge_may_vary": false, "desc": "تنظیم رزولوشن، نرخ نوسازی، مقیاس و چیدمان چند مانیتور.", "guide": "۱. رزولوشن پیشنهادی (Recommended) را انتخاب کنید.\\n۲. در Advanced display نرخ نوسازی (Refresh rate) را روی بیشترین مقدار بگذارید.\\n۳. برای چند مانیتور، چیدمان را با Identify مشخص کنید.", "warning": "رزولوشن نامعتبر ممکن است صفحه را سیاه کند؛ ۱۵ ثانیه صبر کنید تا خودکار برگردد."}, {"id": 47, "name_en": "GPU Performance", "name_fa": "مانیتور عملکرد کارت گرافیک", "category_en": "Graphics", "category_fa": "کارت گرافیک و نمایش", "command": "taskmgr.exe", "badge_admin": false, "badge_may_vary": false, "desc": "نمایش زنده مصرف GPU، حافظه گرافیکی و دما در Task Manager.", "guide": "۱. تب Performance را باز کنید.\\n۲. از ستون چپ GPU را انتخاب کنید.\\n۳. نمودارهای 3D، Copy، Video Encode و دما را بررسی کنید.\\n۴. در تب Processes ستون GPU را مرتب کنید تا پرمصرف‌ترین برنامه را ببینید.", "warning": "نمایش دما فقط روی برخی کارت‌ها و ویندوز ۱۰ به بالا در دسترس است."}, {"id": 48, "name_en": "Reset Graphics Driver", "name_fa": "ریست سریع درایور گرافیک", "category_en": "Graphics", "category_fa": "کارت گرافیک و نمایش", "command": "start ms-settings:display", "badge_admin": false, "badge_may_vary": false, "desc": "راهنمای ریست فوری درایور گرافیک بدون ری‌استارت (رفع فریز تصویر).", "guide": "۱. کلیدهای Win + Ctrl + Shift + B را همزمان فشار دهید.\\n۲. صفحه یک لحظه سیاه می‌شود و صدای بوق می‌آید — این یعنی درایور ریست شد.\\n۳. اگر تصویر فریز کرده بود، معمولاً برطرف می‌شود.", "warning": "کارهای ذخیره‌نشده در برنامه‌های گرافیکی ممکن است از دست برود."}] ;
 
         let currentCategory = 'all';
@@ -2578,10 +3021,15 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         }
 
         function switchMainTab(tabName, btn) {
+            document.getElementById('tabOverviewView').style.display = tabName === 'overview' ? 'block' : 'none';
             document.getElementById('tabToolsView').style.display = tabName === 'tools' ? 'block' : 'none';
             document.getElementById('tabAiView').style.display = tabName === 'ai' ? 'block' : 'none';
             document.getElementById('tabGpuView').style.display = tabName === 'gpu' ? 'block' : 'none';
+            document.getElementById('tabQueueView').style.display = tabName === 'queue' ? 'block' : 'none';
             document.getElementById('tabDevView').style.display = tabName === 'dev' ? 'block' : 'none';
+            document.getElementById('tabSystemView').style.display = tabName === 'system' ? 'block' : 'none';
+            document.getElementById('tabSecurityView').style.display = tabName === 'security' ? 'block' : 'none';
+            document.getElementById('tabDefenderView').style.display = tabName === 'defender' ? 'block' : 'none';
             document.getElementById('tabHistoryView').style.display = tabName === 'history' ? 'block' : 'none';
             document.getElementById('tabSettingsView').style.display = tabName === 'settings' ? 'block' : 'none';
 
@@ -2589,6 +3037,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             if(btn) btn.classList.add('active');
 
             if (tabName === 'history') { refreshHistoryLogs(); loadDbStats(); }
+            if (tabName === 'queue') { renderCommandQueue(); }
+            if (tabName === 'overview') { refreshOverview(); }
+            if (tabName === 'system') { refreshSystemCenter(); }
+            if (tabName === 'security') { refreshSecurityCenter(); }
+            if (tabName === 'defender') { refreshDefender(); }
+            if (tabName !== 'gpu' && typeof stopGpuLivePolling === 'function') { stopGpuLivePolling(); }
             if (tabName === 'ai') {
                 /* تا وقتی تب مخفی بود ارتفاع پیام‌ها صفر بود؛ حالا قابل اندازه‌گیری است */
                 requestAnimationFrame(() => { flushPendingCollapse(); updateChatJumpBtn(); });
@@ -2644,6 +3098,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                     </div>
                     <div>
                         <button class="btn-run" onclick="executeToolDirect(${tool.id})">▶ اجرای ابزار</button>
+                        <button class="btn-guide" onclick="addToolToQueue(${tool.id})">⚡ افزودن به صف</button>
                         <button class="btn-guide" onclick="openToolModal(${tool.id})">📖 راهنما و نحوه کار</button>
                     </div>
                 `;
@@ -3891,7 +4346,72 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
         function scanGpuWithAi() { scanGpu(true); }
 
+        // ── Live GPU metrics ─────────────────────────────────────
+        // فقط nvidia-smi خوانده می‌شود؛ گزارش سنگین GPU/Event Viewer دوباره
+        // اجرا نمی‌شود. در نتیجه مقدارها واقعی و سبک هستند، نه شبیه‌سازی.
+        let gpuLiveTimer = null;
+        let gpuLiveBusy = false;
+        function stopGpuLivePolling() {
+            if (gpuLiveTimer) { clearInterval(gpuLiveTimer); gpuLiveTimer = null; }
+        }
+        function refreshGpuLive() {
+            if (gpuLiveBusy || !document.getElementById('gpuLiveTempValue')) return;
+            gpuLiveBusy = true;
+            fetch('/api/gpu_live', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+            .then(r => r.json()).then(d => {
+                const live = (((d || {}).nvidia_live || {}).cards || [])[0];
+                if (!live) { stopGpuLivePolling(); return; }
+                const temp = Number(live.temperature_c);
+                const usage = Number(live.gpu_util_pct);
+                const tv = document.getElementById('gpuLiveTempValue');
+                const tb = document.getElementById('gpuLiveTempBar');
+                const uv = document.getElementById('gpuLiveUsageValue');
+                const ub = document.getElementById('gpuLiveUsageBar');
+                if (tv) { tv.textContent = Number.isFinite(temp) ? `${temp}°C` : '—'; tv.className = temp >= 80 ? 'state-bad' : temp >= 70 ? 'state-warn' : 'state-good'; }
+                if (tb) tb.style.width = `${Math.min(100, Math.max(0, (temp || 0) / 90 * 100))}%`;
+                if (uv) uv.textContent = Number.isFinite(usage) ? `${usage}%` : '—';
+                if (ub) ub.style.width = `${Math.min(100, Math.max(0, usage || 0))}%`;
+            }).catch(() => {}).finally(() => { gpuLiveBusy = false; });
+        }
+        function startGpuLivePolling() {
+            stopGpuLivePolling();
+            refreshGpuLive();
+            gpuLiveTimer = setInterval(() => {
+                // در تب پنهان یا وقتی پنل از DOM حذف شده درخواست نفرست.
+                const tab = document.getElementById('tabGpuView');
+                if (!tab || tab.style.display === 'none') return;
+                refreshGpuLive();
+            }, 3000);
+        }
+
         function renderGpuReport(r) {
+            // ── خلاصهٔ کارت‌محور مشابه GPU Center در Freebuff، با دادهٔ واقعی ──
+            const primary = (r.gpus || [])[0] || {};
+            const live = ((r.nvidia_live || {}).cards || [])[0] || {};
+            // باید بیرون از if باشد، چون پنل زنده هم از آن استفاده می‌کند.
+            const temp = Number(live.temperature_c);
+            const tempClass = temp >= 80 ? 'state-bad' : temp >= 70 ? 'state-warn' : 'state-good';
+            const metricBox = document.getElementById('gpuMetrics');
+            if (metricBox) {
+                metricBox.innerHTML = `
+                  <div class="center-card"><div class="cc-title">🖥 سازنده / مدل</div><div class="cc-value">${primary.vendor || '—'} ${primary.name || ''}</div></div>
+                  <div class="center-card"><div class="cc-title">💾 حافظه گرافیکی</div><div class="cc-value">${primary.vram_gb ? primary.vram_gb + ' GB' : '—'}</div></div>
+                  <div class="center-card"><div class="cc-title">🧩 نسخه درایور</div><div class="cc-value">${primary.driver_version || '—'}</div></div>
+                  <div class="center-card"><div class="cc-title">⚠️ خطاهای TDR</div><div class="cc-value ${(r.tdr_count||0) ? 'state-bad' : 'state-good'}">${r.tdr_count || 0}</div></div>`;
+            }
+            const livePanels = document.getElementById('gpuLivePanels');
+            if (livePanels) {
+                if (live.temperature_c === undefined && live.gpu_util_pct === undefined) {
+                    livePanels.innerHTML = '<div class="ai-card" style="grid-column:1/-1;color:var(--text-muted)">اطلاعات زندهٔ دما و مصرف فقط در کارت‌های NVIDIA با nvidia-smi قابل دریافت است.</div>';
+                } else {
+                    const tempPct = Math.min(100, Math.max(0, (Number(live.temperature_c)||0) / 90 * 100));
+                    const usePct = Math.min(100, Math.max(0, Number(live.gpu_util_pct)||0));
+                    livePanels.innerHTML = `
+                      <div class="ai-card"><div style="display:flex;justify-content:space-between;align-items:center"><b>🌡 دمای GPU</b><strong id="gpuLiveTempValue" class="${tempClass}">${live.temperature_c ?? '—'}°C</strong></div><div class="app-bar-outer" style="width:100%;margin-top:13px"><div id="gpuLiveTempBar" class="app-bar" style="width:${tempPct}%;background:linear-gradient(90deg,#22c55e,#f97316)"></div></div></div>
+                      <div class="ai-card"><div style="display:flex;justify-content:space-between;align-items:center"><b>📊 مصرف لحظه‌ای GPU</b><strong id="gpuLiveUsageValue" style="color:#93c5fd">${live.gpu_util_pct ?? '—'}%</strong></div><div class="app-bar-outer" style="width:100%;margin-top:13px"><div id="gpuLiveUsageBar" class="app-bar" style="width:${usePct}%;background:linear-gradient(90deg,#3b82f6,#6366f1)"></div></div></div>`;
+                    startGpuLivePolling();
+                }
+            }
             // ── کارت‌های گرافیک ──
             const box = document.getElementById('gpuCards');
             box.innerHTML = '';
@@ -4238,7 +4758,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 // سرویس آن را برنگرداند (مثلاً مدل سفارشی کاربر)
                 if (savedModel && !models.includes(savedModel)) {
                     models.unshift(savedModel);
-                    info.unshift({ id: savedModel, free: false });
+                    // این مدل در فهرست زندهٔ سرویس نیست — وضعیت
+                    // رایگان/پولی‌اش را نمی‌دانیم؛ ❔ می‌گذاریم نه 💰 قطعی.
+                    info.unshift({ id: savedModel, free: false, unknown: true });
                 }
 
                 sel.innerHTML = '';
@@ -4249,7 +4771,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 info.forEach(m => {
                     const o = document.createElement('option');
                     o.value = m.id;
-                    o.innerText = (m.free ? '🆓 ' : '') + m.id;
+                    o.innerText = modelFreeBadge(m) + ' ' + m.id;
                     sel.appendChild(o);
                 });
 
@@ -4278,6 +4800,25 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             .then(r => r.json())
             .then(d => {
                 lastModelsInfo = d.models_info || [];
+                // سرور سرویس را از روی خودِ آدرس تشخیص داد و با انتخاب
+                // قبلی فرق داشت؟ dropdown را همگام کن تا منطق رایگان/
+                // پولی و راهنماها از این به بعد درست باشند.
+                if (d.detected_provider) {
+                    const pSel = document.getElementById('settingProvider');
+                    if (pSel && pSel.value !== d.detected_provider) {
+                        pSel.value = d.detected_provider;
+                        renderProviderHint();
+                    }
+                }
+                // مدل ذخیره‌شده بازنشسته شده و سرور جایگزین انتخاب کرده؟
+                // همان لحظه در کادر مدل اعمال کن تا کاربر سردرگم نشود.
+                if (d.model_switched && d.model_switched.to) {
+                    const mInp = document.getElementById('settingModel');
+                    if (mInp) mInp.value = d.model_switched.to;
+                }
+                // «فقط رایگان» صرفاً یک فیلتر ظاهری نیست: پس از دریافت
+                // فهرست واقعی، مدل فعال را هم به نخستین مدل رایگان می‌برد.
+                if (freeOnlyFilter && d.verified) selectFirstVerifiedFreeModel();
                 renderModelList();
                 if (!el) return;
                 // تفاوت «واقعی از سرور» و «فهرست داخلی» صریح نشان داده می‌شود
@@ -4299,12 +4840,30 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             .catch(() => { if (el) el.innerHTML = '<span style="color:#ef4444;">خطا در ارتباط با سرور</span>'; });
         }
 
-        function toggleFreeOnly() {
-            freeOnlyFilter = !freeOnlyFilter;
+        function applyFreeOnlyState() {
             const b = document.getElementById('btnFreeOnly');
             if (b) {
                 b.classList.toggle('active', freeOnlyFilter);
                 b.innerText = freeOnlyFilter ? '🆓 فقط رایگان (فعال)' : '🆓 فقط مدل‌های رایگان';
+            }
+        }
+
+        function selectFirstVerifiedFreeModel() {
+            // اولویت با مدل‌هایی که با تست واقعی تأیید شده‌اند
+            const verified = lastModelsInfo.filter(m => m.free_verified === true);
+            const free = verified.length ? verified
+                                    : lastModelsInfo.filter(m => m.free);
+            if (!free.length) return false;
+            const inp = document.getElementById('settingModel');
+            if (inp) inp.value = free[0].id;
+            return true;
+        }
+
+        function toggleFreeOnly() {
+            freeOnlyFilter = !freeOnlyFilter;
+            applyFreeOnlyState();
+            if (freeOnlyFilter && !selectFirstVerifiedFreeModel()) {
+                showCustomPopup('فهرست واقعی لازم است', 'برای تضمین انتخاب مدل رایگان، ابتدا «دریافت فهرست واقعی مدل‌ها» را بزنید.');
             }
             renderModelList();
             populateQuickModels();
@@ -4312,6 +4871,108 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
         let modelSearchQuery = '';   // متن جستجوی کامبوی مدل
         let modelSelIndex = -1;      // مورد انتخاب‌شده با کیبورد در dropdown
+
+        /* نشانِ وضعیت رایگان بودن مدل — سه حالت:
+           🆓✓ تأییدشده با تست واقعی · 🆓؟ احتمالی (فقط نام/قیمت) · 💰 هزینه دارد */
+        function modelFreeBadge(m) {
+            if (m && m.free_verified === true) return '🆓✓';
+            if (m && m.free_verified === false) return '💰';
+            if (m && m.unknown) return '❔';
+            if (m && m.free) return '🆓؟';
+            return '💰';
+        }
+
+        /* نتیجهٔ کاوش را روی lastModelsInfo اعمال کن و UI را تازه کن */
+        function applyProbeResults(results) {
+            Object.keys(results || {}).forEach(id => {
+                const r = results[id];
+                let m = lastModelsInfo.find(x => x.id === id);
+                if (!m) { m = { id: id, free: false, free_reason: '' }; lastModelsInfo.push(m); }
+                m.free_verified = r.verdict;
+                m.probe_status = r.status;
+                if (r.verdict === true || r.verdict === false) {
+                    m.free = r.verdict;
+                    m.free_reason = r.reason;
+                }
+            });
+            lastModelsInfo.sort((a, b) => (a.free === b.free) ? a.id.localeCompare(b.id) : (a.free ? -1 : 1));
+            renderModelList();
+            populateQuickModels();
+        }
+
+        /* تست واقعی همهٔ «کاندیداهای رایگان» (حداکثر ۱۲ مدل) — برای
+           روترهایی مثل Bynara که نام مدل ملاک نیست */
+        function probeFreeModels() {
+            const btn = document.getElementById('btnProbeFree');
+            const el = document.getElementById('modelFetchResult');
+            const candidates = lastModelsInfo
+                .filter(m => m.free && m.free_verified !== true && m.free_verified !== false)
+                .map(m => m.id).slice(0, 12);
+            if (!lastModelsInfo.length) {
+                showCustomPopup('فهرست موجود نیست',
+                    'اول «🔍 دریافت فهرست واقعی مدل‌ها» را بزنید تا مدل‌ها از سرویس بیایند، بعد تست واقعی را اجرا کنید.');
+                return;
+            }
+            if (!candidates.length) {
+                showCustomPopup('کاندیدایی برای تست نیست',
+                    'همهٔ مدل‌های احتمالاً رایگان قبلاً تست شده‌اند. برای تست دوباره، از دکمهٔ 🧪 کنار خودِ مدل استفاده کنید.');
+                return;
+            }
+            if (btn) { btn.disabled = true; btn.innerText = '⏳ تست (' + candidates.length + ' مدل)...'; }
+            if (el) el.innerHTML = '⏳ برای هر مدل یک درخواست کوچک واقعی فرستاده می‌شود — چند لحظه صبر کنید...';
+            fetch('/api/probe_models', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ models: candidates })
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (btn) { btn.disabled = false; btn.innerText = '🧪 تست واقعی رایگان بودن'; }
+                if (!d.success) {
+                    if (el) el.innerHTML = '<span style="color:#ef4444;">⚠️ ' + (d.error || 'تست ناموفق بود.') + '</span>';
+                    return;
+                }
+                applyProbeResults(d.results);
+                if (el) {
+                    const lines = Object.entries(d.results)
+                        .map(([id, r]) => {
+                            const icon = r.verdict === true ? '🆓✓' : (r.verdict === false ? '💰' : '❓');
+                            return '<div>' + icon + ' <span style="direction:ltr;display:inline-block;">' + escHtml(id) + '</span> — ' + escHtml(r.reason) + ' (HTTP ' + r.status + ')</div>';
+                        }).join('');
+                    el.innerHTML = '<span style="color:#86efac;">✅ ' + d.free_count + ' مدل رایگان · ' + d.paid_count + ' مدل پولی/بدون دسترسی · ' + (d.probed - d.free_count - d.paid_count) + ' نامشخص</span>'
+                        + '<div style="margin-top:5px; line-height:1.9;">' + lines + '</div>'
+                        + '<div style="color:var(--text-muted); font-size:0.72rem; margin-top:4px;">نتیجه ذخیره می‌شود و در فهرست بالا اعمال شده است.</div>';
+                }
+            })
+            .catch(err => {
+                if (btn) { btn.disabled = false; btn.innerText = '🧪 تست واقعی رایگان بودن'; }
+                if (el) el.innerHTML = '<span style="color:#ef4444;">⚠️ ' + (err.message || 'خطا در ارتباط با سرور') + '</span>';
+            });
+        }
+
+        /* تست تک‌مدل از دکمهٔ 🧪 کنار هر ردیف */
+        function probeOneModel(id, ev) {
+            if (ev) { ev.stopPropagation(); }
+            const el = document.getElementById('modelFetchResult');
+            if (el) el.innerHTML = '⏳ تست واقعی <span style="direction:ltr;display:inline-block;">' + escHtml(id) + '</span> ...';
+            fetch('/api/probe_models', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ models: [id] })
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (!d.success) {
+                    if (el) el.innerHTML = '<span style="color:#ef4444;">⚠️ ' + (d.error || 'تست ناموفق بود.') + '</span>';
+                    return;
+                }
+                applyProbeResults(d.results);
+                const r = (d.results || {})[id] || {};
+                const icon = r.verdict === true ? '🆓✓' : (r.verdict === false ? '💰' : '❓');
+                if (el) el.innerHTML = icon + ' <span style="direction:ltr;display:inline-block;">' + escHtml(id) + '</span> — ' + escHtml(r.reason || '') + ' (HTTP ' + r.status + ')';
+            })
+            .catch(err => {
+                if (el) el.innerHTML = '<span style="color:#ef4444;">⚠️ ' + (err.message || 'خطا در ارتباط با سرور') + '</span>';
+            });
+        }
 
         /* ردیف‌های dropdown را می‌سازد (بر اساس فیلتر جستجو + freeOnly) */
         function modelFilteredList() {
@@ -4350,11 +5011,18 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 row.className = 'model-opt' + (m.id === cur ? ' sel' : '');
                 row.setAttribute('data-index', i);
                 row.onclick = () => pickModel(m.id);
+                const badge = modelFreeBadge(m);
                 const meta = m.context
-                    ? `${m.free ? '🆓' : '💰'} ${Math.round(m.context/1000)}K`
-                    : (m.free ? '🆓' : '💰');
-                row.innerHTML = `<span class="m-id">${escHtml(m.id)}</span>
-                                 <span class="m-meta">${meta}</span>`;
+                    ? `${badge} ${Math.round(m.context/1000)}K`
+                    : badge;
+                const tst = document.createElement('span');
+                tst.className = 'm-test';
+                tst.title = 'تست واقعی رایگان بودن این مدل';
+                tst.innerText = '🧪';
+                tst.onclick = (e) => probeOneModel(m.id, e);
+                row.innerHTML = `<span class="m-id">${escHtml(m.id)}</span>`
+                                + `<span class="m-meta">${meta}</span>`;
+                row.appendChild(tst);
                 frag.appendChild(row);
             });
             dd.innerHTML = '';
@@ -4362,9 +5030,12 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
             const cnt = document.getElementById('modelCountHint');
             if (cnt) {
-                const free = lastModelsInfo.filter(m => m.free).length;
+                const verified = lastModelsInfo.filter(m => m.free_verified === true).length;
+                const probable = lastModelsInfo.filter(m => m.free && m.free_verified == null).length;
                 cnt.innerText = `${lastModelsInfo.length} مدل`
-                    + (free ? ` · ${free} رایگان 🆓` : ' · بدون مدل رایگان شناسایی‌شده');
+                    + (verified ? ` · ${verified} رایگان تأییدشده 🆓✓` : '')
+                    + (probable ? ` · ${probable} احتمالاً رایگان 🆓؟` : '')
+                    + ((!verified && !probable) ? ' · بدون مدل رایگان شناسایی‌شده' : '');
             }
         }
 
@@ -4814,6 +5485,17 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 : '⚡ اجرای مستقیم این دستور';
             run.onclick = () => runAiCommand(info.command, run, info);
             act.appendChild(run);
+            const queue = document.createElement('button');
+            queue.className = 'btn-copy-sm';
+            queue.innerText = '⚡ افزودن به صف';
+            queue.title = 'دستور پیش از اجرا در صف قابل بررسی خواهد بود';
+            queue.onclick = () => {
+                commandQueue.push({ command: info.command, label: info.command,
+                    status: 'pending', reason: info.reason || 'پیشنهاد دستیار AI' });
+                persistCommandQueue();
+                queue.innerText = '✓ به صف افزوده شد';
+            };
+            act.appendChild(queue);
             act.appendChild(makeCopyBtn(info.command));
             box.appendChild(act);
             return box;
@@ -4840,6 +5522,18 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 list.appendChild(row);
             });
             wrap.appendChild(list);
+
+            const queueBtn = document.createElement('button');
+            queueBtn.className = 'btn-copy-sm';
+            queueBtn.style.cssText = 'width:100%; margin:8px 0; padding:9px;';
+            queueBtn.innerText = '⚡ افزودن همه به صف اجرای امن';
+            queueBtn.onclick = () => {
+                commandQueue.push(...cmds.map(c => ({ command:c.command, label:c.command,
+                    status:'pending', reason:c.reason || 'پیشنهاد دستیار AI' })));
+                persistCommandQueue();
+                queueBtn.innerText = '✓ همه به صف افزوده شدند';
+            };
+            wrap.appendChild(queueBtn);
 
             const btn = document.createElement('button');
             btn.className = 'btn-chain';
@@ -5106,15 +5800,26 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             chatBox.appendChild(wait);
             scrollChatToEnd(true);          // کاربر خودش تحلیل را درخواست کرد
 
+            // تحلیل خروجی تعمیر ممکن است به‌خاطر سرویس AI یا گزارش بزرگ طول بکشد.
+            // کاربر باید بتواند بدون Refresh صفحه آن را لغو کند.
+            const analysisController = new AbortController();
+            const cancelAnalysis = document.createElement('button');
+            cancelAnalysis.className = 'btn-copy-sm';
+            cancelAnalysis.style.cssText = 'margin-top:10px; padding:7px 11px;';
+            cancelAnalysis.innerText = '⛔ لغو تحلیل';
+            wait.querySelector('.think-live').appendChild(cancelAnalysis);
+
             const thinkBox = wait.querySelector('.think-live');
             const reasonBox = wait.querySelector('.think-reason');
             const liveBox = wait.querySelector('.live-reply');
             let reasoningText = '';
             let liveText = '';
             let finished = false;
+            let analysisTimeout = null;
             const finish = (d) => {
                 if (finished) return;
                 finished = true;
+                if (analysisTimeout) clearTimeout(analysisTimeout);
                 if (wait.parentNode) chatBox.removeChild(wait);
                 if (d && d.reply) {
                     appendAiMsg(d.reply);
@@ -5128,9 +5833,17 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 scrollChatToEnd(false);         // پاسخ رسید: خواندن کاربر را قطع نکن
             };
 
-            streamAI('/api/analyze_job_output', {
+            cancelAnalysis.onclick = () => {
+                analysisController.abort();
+                finish({ reply: '', error: 'تحلیل توسط شما لغو شد.' });
+            };
+            // برای تحلیل خروجی تعمیر هم سقف زمانی سمت UI نداریم؛ کاربر
+            // در صورت نیاز با «لغو تحلیل» خودش درخواست را قطع می‌کند.
+
+            streamAI('/api/analyze_job_output', { 
                 job_id: jobId, persona: activePersona, stream: true
             }, {
+                signal: analysisController.signal,
                 onJson: (d) => finish(d),
                 onEvent: (ev, obj) => {
                     if (ev === 'reasoning' && obj && obj.text) {
@@ -5158,6 +5871,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 }
             })
             .catch(err => {
+                if (analysisController.signal.aborted) return;
                 if (wait.parentNode) chatBox.removeChild(wait);
                 showCustomPopup('خطا', err.message || 'ارتباط برقرار نشد.');
                 btn.disabled = false;
@@ -5418,12 +6132,22 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             chatBox.appendChild(aiDiv);
             scrollChatToEnd(true);          // کاربر پیام فرستاد: همیشه پایین
 
+            // درخواست‌های دارای NEED_INFO ممکن است دو دور AI اجرا کنند.
+            // لغو و timeout از گیرکردن نامحدود UI جلوگیری می‌کند.
+            const chatController = new AbortController();
+            const cancelChat = document.createElement('button');
+            cancelChat.className = 'btn-copy-sm';
+            cancelChat.style.cssText = 'margin-top:10px; padding:7px 11px;';
+            cancelChat.innerText = '⛔ لغو پاسخ';
+            aiDiv.querySelector('.think-live').appendChild(cancelChat);
+
             const thinkBox = aiDiv.querySelector('.think-live');
             const reasonBox = aiDiv.querySelector('.think-reason');
             const liveBox = aiDiv.querySelector('.live-reply');
             let reasoningText = '';
             let liveText = '';
             let finished = false;   // دقیقاً یک‌بار finalize — خطا + done نباید دوبار اجرا شوند
+            let chatTimeout = null;
 
             // تاریخچه کامل ارسال می‌شود؛ بک‌اند بر اساس ظرفیت مدل
             // تصمیم می‌گیرد چند پیام جا می‌شود (سقف ۸۰ برای امنیت شبکه)
@@ -5438,6 +6162,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             const done = (data) => {
                 if (finished) return;
                 finished = true;
+                if (chatTimeout) clearTimeout(chatTimeout);
                 if (aiDiv.parentNode) chatBox.removeChild(aiDiv);
                 if (data && data.reply) {
                     const el = appendAiMsg(data.reply);
@@ -5463,6 +6188,14 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 scrollChatToEnd(false);         // پاسخ AI: فقط اگر کاربر پایین مانده
             };
 
+            cancelChat.onclick = () => {
+                chatController.abort();
+                done({ reply: '', error: 'پاسخ AI توسط شما لغو شد.' });
+            };
+            // محدودیت زمانی سمت UI عمداً نداریم؛ بعضی مدل‌ها، به‌ویژه
+            // هنگام جمع‌آوری NEED_INFO، دیر پاسخ می‌دهند. کاربر هر زمان
+            // بخواهد با دکمه «لغو پاسخ» درخواست را متوقف می‌کند.
+
             streamAI('/api/ai_chat', {
                 messages: history,
                 persona: activePersona,
@@ -5473,6 +6206,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 })),
                 stream: true
             }, {
+                signal: chatController.signal,
                 /* پاسخ عادی (سروری که SSE ندارد) — مثل قبل */
                 onJson: (data) => done(data),
                 onEvent: (ev, obj) => {
@@ -5518,6 +6252,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 }
             })
             .catch(err => {
+                if (chatController.signal.aborted) return;
                 if (!finished) {
                     if (aiDiv.parentNode) chatBox.removeChild(aiDiv);
                     const el = appendAiMsg('⚠️ ' + (err.message || 'ارتباط با سرور برقرار نشد.') +
@@ -5534,7 +6269,7 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             { key: 'direct', icon: '🔗', title: 'اتصال مستقیم',
               desc: 'بدون پروکسی — برای Groq، OpenRouter و سرویس‌های داخلی' },
             { key: 'system', icon: '🖥', title: 'استفاده از پروکسی سیستم',
-              desc: 'همان پروکسی که ویندوز تنظیم کرده (سایفون، Hiddify، V2Ray و...)' },
+              desc: 'همان پروکسی که ویندوز تنظیم کرده (سایفون System Proxy، Hiddify، V2Ray). اگر پروکسی‌ای نباشد، خودکار مستقیم می‌رود — با تونل VPN هم سازگار است.' },
             { key: 'manual', icon: '✍️', title: 'پروکسی دستی',
               desc: 'آدرس پروکسی را خودتان وارد کنید' },
         ];
@@ -5577,18 +6312,37 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             fetch('/api/system_proxy', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
             .then(r => r.json())
             .then(d => {
+                // آخرین وضعیت تونل را نگه می‌داریم تا «تست اتصال» هم
+                // در صورت شکست، راهنمای درستی نشان دهد.
+                window.__lastTunKinds = d.tun_kinds || [];
+                const tuns = d.tun_vpns || [];
+                const tunNames = [...new Set(tuns.map(t => t.kind))].join('، ');
                 if (d.found) {
                     let html = '<span style="color:#86efac;">✅ پروکسی سیستم فعال است</span>';
                     (d.proxies_list || []).forEach(p => {
                         html += `<div style="margin-top:5px; direction:ltr; text-align:left;
                                     color:#7dd3fc; font-family:Consolas,monospace; font-size:0.78rem;">${p}</div>`;
                     });
+                    html += '<div style="margin-top:8px;color:var(--text-muted);font-size:.75rem;">حالت پیش‌فرض «پروکسی سیستم» از همین مسیر استفاده می‌کند.</div>';
+                    if (tunNames) html += `<div style="margin-top:6px;color:#a5b4fc;font-size:.76rem;">🛡 تونل ${tunNames} هم فعال است؛ اگر تست اتصال شکست خورد، حالت «بدون پروکسی» را هم امتحان کنید.</div>`;
                     el.innerHTML = html;
+                } else if (tuns.length) {
+                    el.innerHTML = `<span style="color:#86efac;">🛡 تونل VPN فعال است (${tunNames})</span>`
+                        + '<div style="margin-top:6px;font-size:.76rem;line-height:1.75;">Psiphon (حالت VPN)، VPN خود ویندوز و ابزارهای مشابه به‌جای پروکسی، تونل شبکه می‌سازند؛ برنامه در همین حالت هم به‌طور شفاف از تونل عبور می‌کند و <b>هیچ تنظیمی لازم نیست</b>. فقط «تست اتصال» را بزنید تا مطمئن شوید.</div>';
+                } else if (d.windows_vpn && (d.windows_vpn.configured || []).length
+                           && !(d.windows_vpn.connected || []).length) {
+                    const names = d.windows_vpn.configured.map(v => v.name).join('، ');
+                    el.innerHTML = '<span style="color:#fcd34d;">🛡 VPN ویندوز پیکربندی شده ولی وصل نیست</span>'
+                        + `<div style="margin-top:6px;font-size:.76rem;line-height:1.75;">${names} در تنظیمات ویندوز (Settings ← Network &amp; internet ← VPN) ثبت شده و الان قطع است.`
+                        + ' همان‌جا روی Connect بزنید و دوباره «بررسی مجدد» را کلیک کنید — بعد از اتصال، برنامه به‌طور خودکار از تونل عبور می‌کند و هیچ تنظیمی لازم نیست.</div>';
                 } else {
-                    el.innerHTML = '<span style="color:#fcd34d;">⚠️ پروکسی سیستم تنظیم نشده است</span>'
-                        + '<div style="margin-top:6px; font-size:0.76rem;">'
-                        + 'اگر از سایفون یا برنامه مشابه استفاده می‌کنید، مطمئن شوید که روشن است '
-                        + 'و گزینه «تنظیم پروکسی سیستم» در آن فعال باشد.</div>';
+                    el.innerHTML = '<span style="color:#fcd34d;">⚠️ نه پروکسی سیستمی هست و نه تونل VPN</span>'
+                        + '<div style="margin-top:6px; font-size:0.76rem;line-height:1.75;">'
+                        + '• <b>Psiphon حالت VPN</b> (پیش‌فرض): در خود سایفون روی Connect بزنید و دوباره «بررسی مجدد» را کلیک کنید — به همین کافی است.<br>'
+                        + '• <b>Hotspot Shield</b>: در خود اپ روی دکمهٔ اتصال (power) بزنید و «بررسی مجدد» را کلیک کنید.<br>'
+                        + '• <b>VPN خود ویندوز</b>: از Settings ← Network &amp; internet ← VPN وصل شوید؛ تنظیمی در برنامه لازم نیست.<br>'
+                        + '• <b>Psiphon حالت System Proxy</b>: در تنظیمات سایفون گزینه System Proxy را فعال کنید، سپس حالت «پروکسی سیستم» را انتخاب کنید.<br>'
+                        + '• یا آدرس پروکسی محلی (مثل Hiddify) را در حالت «پروکسی دستی» وارد کنید.</div>';
                 }
             })
             .catch(() => { el.innerHTML = '<span style="color:#ef4444;">خطا در بررسی</span>'; });
@@ -5629,10 +6383,17 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                         key = `<span style="color:#ef4444;">${d.message || 'کلید نامعتبر'}</span>`;
                     }
                 }
+                let hint = '';
+                if (!d.network_ok && (window.__lastTunKinds || []).length) {
+                    hint = '<div style="color:#fcd34d; font-size:0.74rem; margin-top:5px; line-height:1.7;">'
+                         + 'تونل VPN فعال به نظر می‌رسد ولی اتصال نشد — VPN را یک‌بار قطع و دوباره وصل کنید. '
+                         + 'اگر سایفون در حالت System Proxy است، حالت «پروکسی سیستم» را انتخاب کنید.</div>';
+                }
                 el.innerHTML = `<div>${net}</div>` + (key ? `<div style="margin-top:3px;">${key}</div>` : '')
                     + (!d.network_ok && d.error
                         ? `<div style="color:var(--text-muted); font-size:0.75rem; margin-top:3px;
-                             direction:ltr; text-align:right;">${d.error}</div>` : '');
+                             direction:ltr; text-align:right;">${d.error}</div>` : '')
+                    + hint;
             })
             .catch(() => { el.innerHTML = '<span style="color:#ef4444;">❌ خطا در تست</span>'; });
         }
@@ -5659,6 +6420,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
                 }
                 set('settingBaseUrl', s.base_url);
                 set('settingModel', s.model);
+                freeOnlyFilter = !!s.free_only;
+                applyFreeOnlyState();
                 set('settingProxyUrl', s.proxy_url);
                 const vt = document.getElementById('settingVerifyTls');
                 if (vt) vt.checked = s.verify_tls !== false;
@@ -5672,11 +6435,22 @@ EMBEDDED_HTML = """<!DOCTYPE html>
         }
 
         function saveSettingsForm() {
+            const chosenModel = (document.getElementById('settingModel').value || '').trim();
+            const meta = lastModelsInfo.find(m => m.id === chosenModel);
+            // دکمهٔ «فقط رایگان» باید انتخاب مدل را هم enforce کند، نه فقط
+            // فهرست dropdown را محدود کند. بدون فهرست تأییدشده ادعای رایگان
+            // بودن نمی‌کنیم؛ همین نقطه علت رایج HTTP 402 بود.
+            if (freeOnlyFilter && (!meta || !meta.free)) {
+                showCustomPopup('مدل رایگان تأیید نشده',
+                    'مدل انتخاب‌شده در فهرست واقعی سرویس رایگان تأیید نشده است. «دریافت فهرست واقعی مدل‌ها» را بزنید و یک مدل دارای 🆓 انتخاب کنید.');
+                return;
+            }
             const settings = {
                 api_provider: document.getElementById('settingProvider').value,
                 api_key: document.getElementById('settingApiKey').value,
                 base_url: document.getElementById('settingBaseUrl').value,
-                model: document.getElementById('settingModel').value,
+                model: chosenModel,
+                free_only: freeOnlyFilter,
                 conn_mode: connMode,
                 proxy_url: (document.getElementById('settingProxyUrl') || {}).value || '',
                 verify_tls: (document.getElementById('settingVerifyTls') || {}).checked !== false
@@ -6203,7 +6977,8 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             return fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal: handlers.signal
             })
             .then(async res => {
                 const ct = (res.headers.get('Content-Type') || '');
@@ -6268,7 +7043,9 @@ EMBEDDED_HTML = """<!DOCTYPE html>
 
         /* ─────────────── ویرایشگر ─────────────── */
         function openDevFile(path, onDone) {
-            if (devHasUnsaved() && !confirm('تغییرات ذخیره‌نشده از بین می‌رود. ادامه؟')) {
+            if (devHasUnsaved()) {
+                askConfirm('⚠️ تغییرات ذخیره‌نشده', 'تغییرات ذخیره‌نشده از بین می‌روند. ادامه می‌دهید؟',
+                    () => openDevFile(path, onDone));
                 return;
             }
             /* max_kb=1024: فایل بزرگ‌تر فقط ابتدایش خوانده می‌شود تا مرورگر
@@ -7287,22 +8064,200 @@ EMBEDDED_HTML = """<!DOCTYPE html>
             .catch(() => {});
         }
 
+
+
+
+
+        /* ── Command palette: quick access, no direct shell execution ── */
+        let paletteResults=[], paletteIndex=0;
+        const PALETTE_TABS=[
+          ['overview','🏠','داشبورد'],['tools','🧰','تمامی ابزارها'],['ai','🤖','دستیار AI'],['gpu','🎮','مرکز گرافیک'],
+          ['system','💻','اطلاعات سیستم'],['security','🛡️','مرکز امنیت'],['queue','⚡','صف اجرای امن'],['dev','⌨️','توسعه نرم‌افزار'],['settings','⚙️','تنظیمات']
+        ];
+        function openCommandPalette(){ const el=document.getElementById('commandPalette');el.classList.add('show');paletteIndex=0;document.getElementById('paletteInput').value='';renderCommandPalette();setTimeout(()=>document.getElementById('paletteInput').focus(),0); }
+        function closeCommandPalette(){document.getElementById('commandPalette').classList.remove('show');}
+        function renderCommandPalette(){
+          const q=(document.getElementById('paletteInput').value||'').trim().toLowerCase();
+          const tabs=PALETTE_TABS.filter(x=>!q||x[2].toLowerCase().includes(q)).map(x=>({type:'tab',key:x[0],icon:x[1],title:x[2],detail:'باز کردن صفحه'}));
+          const tools=toolsData.filter(t=>!q||[t.name_fa,t.name_en,t.command,t.category_fa].join(' ').toLowerCase().includes(q)).slice(0,12).map(t=>({type:'tool',tool:t,icon:'🧰',title:t.name_fa,detail:t.command}));
+          paletteResults=[...tabs,...tools]; if(paletteIndex>=paletteResults.length)paletteIndex=0;
+          const box=document.getElementById('paletteList');box.innerHTML=paletteResults.length?paletteResults.map((x,i)=>`<button class="palette-item ${i===paletteIndex?'selected':''}" onclick="choosePalette(${i})"><span>${x.icon} <b>${queueEscape(x.title)}</b></span><small>${queueEscape(x.detail)}</small></button>`).join(''):'<div class="queue-empty">نتیجه‌ای پیدا نشد.</div>';
+        }
+        function choosePalette(i){ const x=paletteResults[i];if(!x)return;closeCommandPalette();if(x.type==='tab'){openOverviewTab(x.key);return;}addToolToQueue(x.tool.id);}
+        function handlePaletteKey(e){ if(e.key==='Escape'){closeCommandPalette();return;}if(!paletteResults.length)return;if(e.key==='ArrowDown'){e.preventDefault();paletteIndex=(paletteIndex+1)%paletteResults.length;renderCommandPalette();}if(e.key==='ArrowUp'){e.preventDefault();paletteIndex=(paletteIndex-1+paletteResults.length)%paletteResults.length;renderCommandPalette();}if(e.key==='Enter'){e.preventDefault();choosePalette(paletteIndex);}}
+        document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openCommandPalette();}});
+
+        /* ── Microsoft Defender / Virus & Threat Protection ── */
+        let defenderJobTimer = null;
+        function defenderMetric(label, value, cls='') { return `<div class="center-card"><div class="cc-title">${label}</div><div class="cc-value ${cls}">${value}</div></div>`; }
+        function refreshDefender() {
+          const box=document.getElementById('defenderMetrics'); if(!box)return; box.innerHTML='<div class="queue-empty" style="grid-column:1/-1">⏳ در حال خواندن وضعیت Microsoft Defender…</div>';
+          const defenderPost = (url) => fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json());
+          Promise.all([defenderPost('/api/defender/status'),defenderPost('/api/defender/threats'),defenderPost('/api/defender/exclusions')]).then(([st,th,ex])=>{
+            if(!st.success){box.innerHTML=`<div class="queue-empty" style="grid-column:1/-1">⚠️ ${escHtml(st.error||'Defender در دسترس نیست.')}</div>`;return;}
+            const s=st.status||{}; box.innerHTML=defenderMetric('محافظت زنده',s.realtime_enabled?'فعال':'غیرفعال',s.realtime_enabled?'state-good':'state-bad')+defenderMetric('آنتی‌ویروس',s.antivirus_enabled?'فعال':'غیرفعال',s.antivirus_enabled?'state-good':'state-bad')+defenderMetric('حفاظت ابری',s.cloud_enabled?'فعال':'غیرفعال',s.cloud_enabled?'state-good':'state-warn')+defenderMetric('آخرین بروزرسانی',s.signatures_updated||'—')+defenderMetric('آخرین Quick Scan',s.quick_scan||'—')+defenderMetric('تهدیدهای ثبت‌شده',(th.threats||[]).length,(th.threats||[]).length?'state-warn':'state-good');
+            document.getElementById('defenderThreats').innerHTML=(th.threats||[]).length?(th.threats||[]).map(x=>`<div class="app-row">شناسه تهدید: ${escHtml(x.id)} · وضعیت: ${escHtml(x.status)} · منابع: ${x.resource_count}</div>`).join(''):'<span class="state-good">✅ تهدید ثبت‌شده‌ای یافت نشد.</span>';
+            document.getElementById('defenderExclusions').innerHTML=(ex.items||[]).length?(ex.items||[]).map(x=>`<div class="app-row ${x.severity==='warning'?'issue-warning':''}"><b>${x.severity==='warning'?'⚠️ نیازمند بررسی':'ℹ️'}</b> ${escHtml(x.type)}: <code>${escHtml(x.value)}</code></div>`).join(''):'<span class="state-good">✅ استثنایی ثبت نشده است.</span>';
+          }).catch(()=>{box.innerHTML='<div class="queue-empty" style="grid-column:1/-1">⚠️ دریافت وضعیت Defender ناموفق بود.</div>';});
+        }
+        function updateDefenderSignatures(){ const b=event&&event.target;b&& (b.disabled=true);fetch('/api/defender/update_signatures',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()).then(d=>{showCustomPopup(d.success?'✅ بروزرسانی انجام شد':'⚠️ بروزرسانی ناموفق',d.message||d.error||'');refreshDefender();}).finally(()=>{if(b)b.disabled=false;}); }
+        function analyzeDefenderWithAi(){
+            const card=document.getElementById('defenderAiCard');
+            const out=document.getElementById('defenderAiReply');
+            card.style.display='block';
+            out.innerHTML='⏳ در حال آماده‌سازی گزارش ناشناس‌شده برای AI…';
+            fetch('/api/defender/analyze', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({model: currentModel() || undefined})
+            })
+            .then(r=>r.json())
+            .then(d=>{
+                out.innerHTML=d.reply ? formatMarkdown(d.reply) : `<span style="color:#fca5a5">⚠️ ${escHtml(d.error || 'تحلیلی دریافت نشد.')}</span>`;
+                if(d.reply) enhanceWithCodeBoxes(out,d.reply);
+            })
+            .catch(()=>{ out.innerHTML='<span style="color:#fca5a5">⚠️ ارتباط با سرور برقرار نشد.</span>'; });
+        }
+        function startDefenderScan(type){ const label=type==='full'?'Full Scan':'Quick Scan'; askConfirm('🛡 تأیید اسکن Defender', `آیا ${label} Microsoft Defender شروع شود؟`, () => runDefenderScan(type)); }
+        function runDefenderScan(type){ fetch('/api/defender/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type})}).then(r=>r.json()).then(d=>{if(!d.success){showCustomPopup('خطا',d.error||'شروع اسکن ناموفق بود.');return;}const el=document.getElementById('defenderScanStatus');el.textContent='⏳ اسکن در حال اجراست…';clearInterval(defenderJobTimer);defenderJobTimer=setInterval(()=>fetch('/api/defender/job_status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:d.job_id})}).then(r=>r.json()).then(j=>{el.textContent=j.status==='running'?'⏳ اسکن در حال اجراست…':(j.status==='done'?'✅ اسکن پایان یافت.':'⚠️ '+(j.output||'اسکن ناموفق بود.'));if(j.status!=='running'){clearInterval(defenderJobTimer);refreshDefender();}}),2000);}).catch(()=>showCustomPopup('خطا','ارتباط با سرور برقرار نشد.')); }
+
+        /* ── مراکز System / Security با دادهٔ واقعی بک‌اند ── */
+        function setCenter(id,value,cls){ const e=document.getElementById(id);if(!e)return;e.textContent=value;e.className='cc-value '+(cls||''); }
+        function refreshSystemCenter(){
+          document.getElementById('sysDetails').textContent='در حال جمع‌آوری اطلاعات سیستم…';
+          fetch('/api/diagnose').then(r=>r.json()).then(d=>{
+            const os=d.os||d.windows||{}, cpu=d.cpu||{}, ram=d.ram||d.memory||{}, disk=d.disk_c||{}, net=d.network||{};
+            setCenter('sysOs',os.name||os.caption||d.os_name||'Windows'); setCenter('sysCpu',cpu.name||cpu.model||'—');
+            setCenter('sysRam',ram.total_gb!==undefined?`${ram.available_gb ?? '—'} / ${ram.total_gb} GB آزاد`:(ram.total||'—'));
+            setCenter('sysDisk',disk.free_gb!==undefined?`${disk.free_gb} GB آزاد`:'—',disk.percent_used>90?'state-bad':'');
+            setCenter('sysNetwork',net.connected===false?'قطع':'آماده',net.connected===false?'state-bad':'state-good');
+            const events=d.event_viewer_logs||d.event_errors||[];setCenter('sysEvents',Array.isArray(events)?`${events.length} مورد`:'—',Array.isArray(events)&&events.length?'state-warn':'state-good');
+            document.getElementById('sysDetails').textContent='اسکن کامل شد. برای تحلیل علت خطاها، از تب دستیار AI یا بررسی محلی استفاده کنید.';
+          }).catch(()=>document.getElementById('sysDetails').textContent='دریافت گزارش سیستم ناموفق بود.');
+        }
+        function refreshSecurityCenter(){
+          document.getElementById('secDetails').textContent='در حال خواندن سنجه‌های امنیتی…';
+          Promise.all([
+            fetch('/api/health_snapshot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys:['defender_realtime','pending_reboot','problem_drivers']})}).then(r=>r.json()),
+            fetch('/api/restore_status',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()),
+            fetch('/api/settings').then(r=>r.json())
+          ]).then(([health,restore,settings])=>{
+            const h=health.snapshot||{};
+            // health_snapshot metric objects have {value, error}; do not compare the object itself.
+            const defender = h.defender_realtime || {}, reboot = h.pending_reboot || {}, drivers = h.problem_drivers || {};
+            const defenderOn = defender.value === 1 || defender.value === true;
+            const defenderOff = defender.value === 0 || defender.value === false;
+            setCenter('secDefender', defender.error ? 'در دسترس نیست' : defenderOn ? 'فعال' : defenderOff ? 'غیرفعال' : 'نامشخص', defenderOn ? 'state-good' : defenderOff ? 'state-bad' : 'state-warn');
+            const rebootNeeded = reboot.value === 1 || reboot.value === true;
+            setCenter('secReboot', reboot.error ? 'نامشخص' : rebootNeeded ? 'نیاز دارد' : 'نیازی نیست', rebootNeeded ? 'state-warn' : reboot.error ? 'state-warn' : 'state-good');
+            const count = Number(drivers.value || 0); setCenter('secDrivers', drivers.error ? 'نامشخص' : `${count} مورد`, count ? 'state-warn' : drivers.error ? 'state-warn' : 'state-good');
+            const protectedNow=restore.enabled === true;setCenter('secRestore',protectedNow?'آماده':'بررسی لازم',protectedNow?'state-good':'state-warn');
+            const kp=settings.api_key_protection||{};setCenter('secKeyProtection',kp.encrypted?'DPAPI فعال':kp.available?'نیازمند ذخیرهٔ مجدد':'رمزنگاری در دسترس نیست',kp.encrypted?'state-good':'state-warn');
+            document.getElementById('secDetails').textContent='بررسی امنیتی کامل شد. نتیجه‌ها از سنجه‌های محلی و تنظیمات فعلی برنامه خوانده شده‌اند.';
+          }).catch(()=>document.getElementById('secDetails').textContent='بررسی امنیتی ناموفق بود.');
+        }
+
+        /* ── داشبورد وضعیت؛ فقط از endpointهای واقعی برنامه داده می‌گیرد ── */
+        function openOverviewTab(tab){ const link=[...document.querySelectorAll('.nav-link-custom')].find(x=>String(x.getAttribute('onclick')||'').includes(`'${tab}'`)); switchMainTab(tab,link); }
+        function overviewSet(id,text){const e=document.getElementById(id);if(e)e.textContent=text;}
+        function refreshOverview(){
+          overviewSet('overviewHealth','در حال خواندن…');
+          fetch('/api/diagnose').then(r=>r.json()).then(d=>{
+            const disk=d.disk_c||{}; const temp=d.temp_files||{}; const events=d.event_viewer_logs||d.event_errors||[];
+            overviewSet('overviewDisk',disk.free_gb!==undefined?`${disk.free_gb} GB آزاد`:'—');
+            overviewSet('overviewTemp',temp.size_mb!==undefined?`${temp.size_mb} MB`:'—');
+            overviewSet('overviewEvents',Array.isArray(events)?`${events.length} مورد`:'—');
+            overviewSet('overviewHealth','دادهٔ زنده دریافت شد');
+          }).catch(()=>overviewSet('overviewHealth','اتصال برقرار نشد'));
+        }
+        function runOverviewDiagnosis(){
+          overviewSet('overviewHealth','در حال تحلیل محلی…');
+          fetch('/api/local_diagnose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fast:true})}).then(r=>r.json()).then(d=>{
+            const c=d.counts||{}; const text=d.summary_fa||'نتیجه‌ای دریافت نشد.';
+            document.getElementById('overviewFindings').innerHTML=`${queueEscape(text)}<br><span style="color:#fca5a5">${c.critical||0} بحرانی</span> · <span style="color:#fde68a">${c.warning||0} هشدار</span>`;
+            overviewSet('overviewHealth',d.healthy?'سالم':'نیازمند توجه');
+          }).catch(()=>overviewSet('overviewHealth','تحلیل ناموفق بود'));
+        }
+        function addToolToQueue(id){
+          const tool=toolsData.find(t=>String(t.id)===String(id)); if(!tool)return;
+          commandQueue.push({command:tool.command,label:tool.name_fa,status:'pending',reason:tool.badge_admin?'نیازمند دسترسی Administrator':'ابزار انتخاب‌شده'}); persistCommandQueue();
+          const badge=[...document.querySelectorAll('.nav-link-custom')].find(x=>String(x.getAttribute('onclick')||'').includes("'queue'")); switchMainTab('queue',badge);
+        }
+
+        /* ── صف اجرای امن؛ اقتباس از جریان Freebuff، بدون شبیه‌سازی ── */
+        const COMMAND_QUEUE_KEY = 'pcr_command_queue_v1';
+        let commandQueue = [];
+        try { commandQueue = JSON.parse(localStorage.getItem(COMMAND_QUEUE_KEY) || '[]'); } catch (_) { commandQueue = []; }
+        function persistCommandQueue(){ localStorage.setItem(COMMAND_QUEUE_KEY, JSON.stringify(commandQueue)); renderCommandQueue(); }
+        function queueEscape(s){ const d=document.createElement('div'); d.textContent=String(s||''); return d.innerHTML; }
+        function renderCommandQueue(){
+          const list=document.getElementById('commandQueueList'), badge=document.getElementById('queueNavCount'); if(!list) return;
+          const pending=commandQueue.filter(x=>x.status==='pending').length;
+          if(badge) badge.textContent=pending ? pending : '';
+          if(!commandQueue.length){ list.innerHTML='<div class="queue-empty"><div style="font-size:2rem">⚡</div><b>صف اجرا خالی است</b><br><small>از این صفحه یا دستورات پیشنهادی AI، فرمان‌ها را به صف اضافه کنید.</small></div>'; return; }
+          list.innerHTML=commandQueue.map((x,i)=>`<article class="queue-item"><div class="queue-item-head"><div><b>${queueEscape(x.label||'دستور ویندوز')}</b><div style="font-size:.73rem;color:var(--text-muted);margin-top:3px">${queueEscape(x.reason||'در انتظار بررسی')}</div></div><div><span class="queue-state ${queueEscape(x.status)}">${({pending:'در انتظار',running:'در حال اجرا',done:'پایان‌یافته',error:'خطا'})[x.status]||'نامشخص'}</span> <button class="live-btn" onclick="removeQueueItem(${i})">×</button></div></div><code class="queue-command">${queueEscape(x.command)}</code>${x.output?`<pre class="queue-command" style="color:#94a3b8">${queueEscape(x.output)}</pre>`:''}</article>`).join('');
+        }
+        function addQueueCommands(){
+          const input=document.getElementById('queueCommandInput'), lines=(input.value||'').split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean);
+          if(!lines.length) return; commandQueue.push(...lines.map(command=>({command,label:command,status:'pending',reason:'در انتظار بررسی امنیتی'}))); input.value=''; persistCommandQueue();
+        }
+        function removeQueueItem(i){ commandQueue.splice(i,1); persistCommandQueue(); }
+        function clearCommandQueue(){ askConfirm('🗑 پاک‌کردن صف', 'همهٔ موارد صف اجرای امن پاک شوند؟', () => { commandQueue=[]; persistCommandQueue(); }); }
+        function runQueuedCommands(){
+          const items=commandQueue.filter(x=>x.status==='pending'); const status=document.getElementById('queueStatus');
+          if(!items.length){ status.textContent='دستور قابل اجرا در صف نیست.'; return; }
+          askConfirm('⚡ اجرای صف امن', `اجرای ${items.length} دستور آغاز شود؟\\n\\nدر صورت نیاز، UAC فقط یک‌بار نمایش داده می‌شود.`, () => executeQueuedCommands(items, status));
+        }
+        function executeQueuedCommands(items, status){
+          items.forEach(x=>x.status='running'); persistCommandQueue(); status.textContent='دروازهٔ امنیتی و اجرای زنجیره در حال شروع است…';
+          fetch('/api/run_command_chain',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({commands:items.map(x=>x.command),user_confirmed:true})}).then(r=>r.json()).then(d=>{
+            if(!d.success){ items.forEach(x=>{x.status='error';x.output=d.error||'اجرا ناموفق بود';}); persistCommandQueue(); status.textContent='اجرای صف آغاز نشد.'; return; }
+            status.textContent='زنجیره شروع شد؛ خروجی زنده در همین صفحه نمایش داده می‌شود.';
+            pollQueuedJob(d.job_id, items, 0);
+          }).catch(()=>{items.forEach(x=>{x.status='error';x.output='خطای ارتباط با سرور محلی';});persistCommandQueue();});
+        }
+        function pollQueuedJob(jobId, items, offset){
+          if(!jobId) return;
+          fetch('/api/job_live',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_id:jobId,offset:offset||0})}).then(r=>r.json()).then(d=>{
+            const status=document.getElementById('queueStatus');
+            if(!d.success){ items.forEach(x=>{x.status='error';x.output=d.error||'وضعیت اجرا قابل خواندن نیست';});persistCommandQueue(); return; }
+            if(d.chunk) items.forEach(x=>x.output=(x.output||'')+d.chunk);
+            const done=['done','cancelled','interrupted'].includes(d.status);
+            if(done){ const ok=d.status==='done'; items.forEach(x=>x.status=ok?'done':'error'); status.textContent=ok?'اجرای زنجیره با موفقیت پایان یافت.':`اجرای زنجیره متوقف شد: ${d.status}`; persistCommandQueue(); return; }
+            persistCommandQueue(); setTimeout(()=>pollQueuedJob(jobId,items,d.offset||0),900);
+          }).catch(()=>{items.forEach(x=>x.status='error');persistCommandQueue();});
+        }
+
         function openGeneralGuide() { document.getElementById('generalGuideModal').classList.add('show'); }
         function closeGeneralGuide() { document.getElementById('generalGuideModal').classList.remove('show'); }
 
-        if (typeof document !== 'undefined') {
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => { renderTools(); refreshHistoryLogs(); initChatScroll(); loadChatSessions(); loadPersonas(); initResizePersistence(); loadSettings(); refreshVisionState(); });
-            } else {
-                renderTools(); refreshHistoryLogs(); initChatScroll(); loadChatSessions(); loadPersonas(); initResizePersistence(); loadSettings(); refreshVisionState();
-            }
+        // یک بار راه‌اندازی کن. اجرای هم‌زمان DOMContentLoaded و window.onload
+        // قبلاً همه درخواست‌ها (مدل‌ها، diagnose، proxy) را دوبار می‌فرستاد و
+        // برای سرویس‌های rate-limited مثل NaraRouter مشکل‌ساز بود.
+        let appBooted = false;
+        function bootAppOnce() {
+            if (appBooted) return;
+            appBooted = true;
+            renderTools(); renderCommandQueue(); refreshOverview(); refreshHistoryLogs();
+            initChatScroll(); loadChatSessions(); loadPersonas(); initResizePersistence();
+            loadSettings(); refreshVisionState();
         }
-        if (typeof window !== 'undefined') {
-            window.onload = () => { renderTools(); refreshHistoryLogs(); initChatScroll(); loadChatSessions(); loadPersonas(); initResizePersistence(); loadSettings(); refreshVisionState(); };
+        if (typeof document !== 'undefined') {
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootAppOnce, { once:true });
+            else bootAppOnce();
         }
     </script>
+
+    <!-- Global command palette -->
+    <div id="commandPalette" class="palette-backdrop" onclick="if(event.target===this)closeCommandPalette()">
+      <div class="palette" role="dialog" aria-modal="true" aria-label="جستجو و فرمان سریع">
+        <input id="paletteInput" class="palette-input" autocomplete="off" placeholder="نام ابزار، دستور یا صفحه را جستجو کنید…" oninput="renderCommandPalette()" onkeydown="handlePaletteKey(event)">
+        <div id="paletteList" class="palette-list"></div>
+        <div class="palette-hint">↑ ↓ انتخاب · Enter باز کردن یا افزودن به صف · Esc بستن</div>
+      </div>
+    </div>
 </body>
 </html>
+
 """
 
 # فهرست مدل‌ها از ماژول providers خوانده می‌شود تا در یک جا متمرکز بماند
@@ -7579,6 +8534,18 @@ def get_settings():
                           "socks_host", "socks_port", "auto_update_configs",
                           "proxy_sub_url"):
                     saved.pop(k, None)
+                # مدل بازنشسته‌شده (مثل llama-3.3-70b-versatile که Groq
+                # حذف کرد) → مدل پیش‌فرضِ فعلی همان سرویس‌دهنده
+                if saved.get("model") in providers.DEPRECATED_MODELS:
+                    old = saved.get("model")
+                    pv = providers.get_provider(
+                        saved.get("api_provider") or defaults.get("api_provider"))
+                    saved["model"] = (pv or {}).get("default_model", DEFAULT_AI_MODEL)
+                    try:
+                        log_event(f"Migrated deprecated model '{old}' -> "
+                                  f"'{saved['model']}'")
+                    except Exception:
+                        pass
                 merged = dict(defaults)
                 merged.update(saved)
                 # کلید API روی دیسک رمز شده است؛ کد داخلی به مقدار خام
@@ -7595,12 +8562,15 @@ def get_settings_public():
     """
     همان تنظیمات، ولی امن برای ارسال به رابط کاربری.
     کلید کامل هرگز از سرور خارج نمی‌شود — فقط ماسک آن.
+    وضعیت رمزنگاری نیز شفاف اعلام می‌شود تا fallback متن خام پنهان نماند.
     """
     s = dict(get_settings())
     key = s.get("api_key") or ""
     s["api_key"] = ""                       # هرگز مقدار کامل نمی‌رود
     s["api_key_masked"] = security.mask_secret(key)
     s["api_key_set"] = bool(key)
+    s["api_key_protection"] = security.secret_protection_status(
+        _raw_stored_api_key())
     return s
 
 
@@ -7609,13 +8579,17 @@ def _default_settings():
         "api_provider": "groq",
         "api_key": "",
         "base_url": "https://api.groq.com/openai/v1",
-        "model": "llama-3.3-70b-versatile",
+        "model": DEFAULT_AI_MODEL,
         # ── اتصال و پروکسی ──
         # direct = بدون پروکسی | system = پروکسی ویندوز | manual = دستی
         "conn_mode": "system",
         "proxy_url": "",
         "verify_tls": True,
         "request_timeout": 45,
+        # فقط مدل‌هایی که فهرست واقعی سرویس رایگان اعلام کرده نمایش/ذخیره شوند.
+        # این گزینه تضمین Billing سرویس‌دهنده نیست، اما جلوی انتخاب تصادفی
+        # مدل پولی در رابط را می‌گیرد.
+        "free_only": False,
         # نام کاربری/رایانه/SID پیش از ارسال به سرویس‌دهندهٔ AI
         # با برچسب عمومی جایگزین شوند
         "anonymize_diag": True,
@@ -7649,6 +8623,202 @@ def st_auto_restore():
         return True
 
 
+# ═════════════════════════════════════════════════════════════════
+# لایهٔ بازیابی خودکار AI — مستقل از سرویس‌دهندهٔ خاص
+# ═════════════════════════════════════════════════════════════════
+# مشکل رایج: سرویس‌دهنده مدلی را بازنشسته/حذف می‌کند (نمونهٔ واقعی:
+# Groq مدل llama-3.3-70b-versatile را حذف کرد؛ روتر Bynara مسیر
+# auto/bynara را برداشت). تنظیماتِ کاربر هنوز مدل مرده را دارد و هر
+# درخواست با 404/403 می‌میرد — برای «هر» سرویس دیگری هم ممکن است
+# اتفاق بیفتد.
+#
+# این لایه عمومی است و از متنِ خطا تشخیص می‌دهد (نه از نام مدل):
+#   ۱) خطای «مدل مرده»: 404 همراه با واژهٔ model، یا 403 پلن/دسترسیِ مدل
+#   ۲) یافتن جایگزین: کشِ کاوش‌ها → مدل‌های رایگانِ فهرست زنده → پیش‌فرض provider
+#   ۳) تکرار درخواست با مدل جدید + ذخیرهٔ مهاجرت + اطلاع به کاربر
+
+
+def _is_dead_model_response(status, body):
+    """آیا این خطا یعنی «مدل در دسترس نیست»؟ (عمومی، بدون نام مدل خاص)"""
+    low = (body or "").lower()
+    if status == 404 and "model" in low:
+        return True          # «The model `X` does not exist»
+    if status == 403 and "model" in low and (
+            "plan" in low or "not include" in low or "no access" in low
+            or "not have access" in low):
+        return True          # «Your plan does not include the requested model»
+    # بعضی روترها به‌جای 404، مرده‌بودن مدل را با 400 اعلام می‌کنند
+    # (نمونهٔ واقعی Bynara: agnes-2.5-flash ← «The requested model is
+    # not available.»). دقت: 400ِ «model rejected this request» مرگِ
+    # مدل نیست (خطای ورودی/پارامتر است) و فیلوور نمی‌گیرد.
+    if status == 400 and re.search(
+            r"model (is |was )?not available|requested model is not available",
+            low):
+        return True
+    return False
+
+
+def _cache_probe_result(mid, verdict, status):
+    """ثبت نتیجهٔ کاوش یک مدل در فایل تنظیمات (بدون دست‌زدن به سایر فیلدها)."""
+    if not mid:
+        return
+    try:
+        data = {}
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        probes = data.get("free_probes") or {}
+        probes[mid] = {"v": verdict, "s": status, "t": time.time()}
+        data["free_probes"] = probes
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log_event(f"Probe cache write failed: {e}")
+
+
+def _failover_candidates(st, dead_model, chat_url, headers):
+    """
+    مدل‌های جایگزینِ ممکن، به‌ترتیب اعتماد:
+      ۱) مدل‌هایی که کاوش واقعی آن‌ها را سالم/رایگان تأیید کرده
+      ۲) مدل پیش‌فرضِ سرویس‌دهنده (انتخابِ به‌روز و بازبینی‌شده)
+      ۳) مدل‌های رایگانِ فهرستِ زندهٔ سرویس (قیمت صفر از خود سرویس)
+    """
+    cands, seen = [], set()
+
+    def add(m):
+        if m and m != dead_model and m not in seen:
+            seen.add(m)
+            cands.append(m)
+
+    for mid, pr in (st.get("free_probes") or {}).items():
+        if isinstance(pr, dict) and pr.get("v") is True:
+            add(mid)
+
+    try:
+        pv = providers.get_provider(st.get("api_provider") or "")
+        if pv:
+            add(pv.get("default_model"))
+    except Exception:
+        pass
+
+    try:
+        _, models_url = normalize_ai_endpoints(chat_url)
+        res = proxy.forward_ai_request(models_url, dict(headers or {}),
+                                       method="GET", timeout=20)
+        if res.get("status") == 200:
+            raw = json.loads(res.get("data", "{}"))
+            items = raw.get("data") or raw.get("models") or []
+            # سرویس از روی میزبان — نه از تنظیمات کهنه
+            prov = (providers.detect_provider_by_url(models_url)
+                    or (st.get("api_provider") or "").lower())
+            enriched, _ = model_info.enrich_models(items, prov)
+            for m in enriched:
+                if m.get("free"):
+                    add(m["id"])
+    except Exception as e:
+        log_event(f"Failover list fetch failed: {e}")
+    return cands[:5]
+
+
+def _persist_model_switch(old, new):
+    """ذخیرهٔ مدل جدید در تنظیمات تا دفعهٔ بعد مستقیم همان استفاده شود."""
+    try:
+        merged = get_settings()
+        merged["model"] = new
+        save_settings(merged)
+        log_event(f"AI model auto-switched and saved: '{old}' -> '{new}'")
+    except Exception as e:
+        log_event(f"Model switch persist failed: {e}")
+
+
+def ai_forward_request(chat_url, headers, payload, st=None, timeout=None,
+                       method="POST"):
+    """
+    proxy.forward_ai_request + بازیابی خودکار از مدل مرده.
+
+    اگر پاسخ از جنس «مدل موجود/در دسترس نیست» بود، با مدل‌های جایگزین
+    (کش کاوش → فهرست زندهٔ سرویس → پیش‌فرض provider) به‌ترتیب امتحان
+    می‌کند. پاسخ موفق کلید switched_model هم دارد تا کاربر مطلع شود.
+    """
+    st = st or get_settings()
+    res = proxy.forward_ai_request(
+        chat_url, headers, payload, method=method,
+        use_socks=st.get("use_socks", True), timeout=timeout)
+    if not _is_dead_model_response(res.get("status"),
+                                   res.get("data") or res.get("error") or ""):
+        return res
+
+    dead = payload.get("model") or ""
+    log_event(f"Dead model detected ('{dead}', HTTP {res.get('status')}) "
+              f"— trying automatic failover.")
+    _cache_probe_result(dead, False, res.get("status"))
+    for cand in _failover_candidates(st, dead, chat_url, headers):
+        res2 = proxy.forward_ai_request(
+            chat_url, headers, dict(payload, model=cand), method=method,
+            use_socks=st.get("use_socks", True), timeout=timeout)
+        if res2.get("status") == 200:
+            _cache_probe_result(cand, True, 200)
+            _persist_model_switch(dead, cand)
+            res2 = dict(res2)
+            res2["switched_model"] = {"from": dead, "to": cand}
+            return res2
+        if _is_dead_model_response(res2.get("status"),
+                                   res2.get("data") or res2.get("error") or ""):
+            _cache_probe_result(cand, False, res2.get("status"))
+    return res
+
+
+def ai_forward_stream(chat_url, headers, payload, st=None):
+    """
+    proxy.forward_ai_stream + بازیابی خودکار از مدل مرده.
+
+    فقط وقتی هیچ داده‌ای هنوز به کاربر نرسیده جایگزینی انجام می‌شود؛
+    پیش از ادامه با مدل جدید یک رویداد note می‌فرستد تا UI خبر دهد.
+    """
+    st = st or get_settings()
+    use_socks = st.get("use_socks", True)
+    tried = {payload.get("model")}
+    switched = None
+    last_dead = None
+    delivered = False
+    while True:
+        for ev in proxy.forward_ai_stream(chat_url, headers, payload,
+                                          use_socks=use_socks):
+            t = ev.get("type")
+            if t == "data":
+                delivered = True
+                yield ev
+            elif (t == "http_error"
+                  and _is_dead_model_response(ev.get("status"),
+                                              ev.get("body") or "")):
+                dead = payload.get("model") or ""
+                _cache_probe_result(dead, False, ev.get("status"))
+                cand = next((c for c in _failover_candidates(
+                    st, dead, chat_url, headers) if c not in tried), None)
+                if not cand:
+                    yield ev
+                    return
+                tried.add(cand)
+                switched, last_dead = cand, dead
+                yield {"type": "note",
+                       "text": f"♻️ مدل «{dead}» در سرویس در دسترس نبود؛ "
+                               f"ادامه با مدل «{cand}»."}
+                break
+            else:
+                yield ev
+                if t == "done":
+                    if switched and last_dead:
+                        _cache_probe_result(switched, True, 200)
+                        _persist_model_switch(last_dead, switched)
+                    return
+        else:
+            if switched and delivered:
+                _cache_probe_result(switched, True, 200)
+                _persist_model_switch(last_dead, switched)
+            return
+        payload = dict(payload, model=switched)
+
+
 def _ai_complete(messages, persona_key="doctor", body=None):
     """
     یک فراخوانی سادهٔ AI برای تحلیل‌های کوتاه.
@@ -7676,20 +8846,59 @@ def _ai_complete(messages, persona_key="doctor", body=None):
     msgs.extend(messages)
 
     payload = {
-        "model": body.get("model") or st.get("model", "llama-3.3-70b-versatile"),
+        "model": body.get("model") or st.get("model", DEFAULT_AI_MODEL),
         "messages": msgs,
         "temperature": 0.2,
     }
     try:
-        res = proxy.forward_ai_request(
-            chat_url, {"Authorization": f"Bearer {api_key}"},
-            payload, method="POST", use_socks=st.get("use_socks", True))
+        res = ai_forward_request(
+            chat_url, {"Authorization": f"Bearer {api_key}"}, payload, st=st)
         if res.get("status") == 200:
             data = json.loads(res.get("data", "{}"))
-            return {"reply": data["choices"][0]["message"]["content"]}
-        return {"error": f"سرویس‌دهنده پاسخ {res.get('status')} داد."}
+            reply = data["choices"][0]["message"]["content"]
+            # مدل/مسیرهای خرابِ رایگان گاهی یک جمله را ده‌ها بار تکرار
+            # می‌کنند (تبلیغ روتر) — قبل از رسیدن به کاربر فشرده کن.
+            reply, reps = model_info.collapse_repeated_text(reply)
+            if reps:
+                log_event(f"AI reply collapsed {reps} repetition run(s).")
+            return {"reply": reply}
+        status = res.get("status", 0)
+        raw = res.get("error") or res.get("data") or ""
+        fe = model_info.friendly_api_error(raw, payload.get("model"))
+        if status == 0:
+            # HTTP 0 یعنی هیچ پاسخ HTTP دریافت نشده؛ علت واقعی proxy.py را
+            # مخفی نکن (معمولاً ReadTimeout / ProxyError / ConnectionError).
+            detail = str(raw or "جزئیات شبکه در دسترس نیست.")[:420]
+            log_event("AI request HTTP 0: " + detail)
+            return {"error": "🌐 پاسخ HTTP از سرویس AI دریافت نشد (HTTP 0). "
+                             "ممکن است مدل دیر پاسخ داده، اتصال قطع شده یا پروکسی مشکل داشته باشد.\n\n"
+                             "جزئیات فنی: " + detail}
+        if status == 402:
+            return {"error": "💳 مدل یا پلن انتخاب‌شده اعتبار کافی ندارد (HTTP 402). "
+                             "در NaraRouter/Bynara، واژه Free در نام مدل به‌تنهایی "
+                             "دسترسی رایگان را تضمین نمی‌کند؛ پلن و اعتبار همان حساب را بررسی کنید."}
+        return {"error": f"{fe['title']} (HTTP {status}). 💡 {fe['hint']}"}
     except Exception as e:
         return {"error": f"ارتباط با سرویس AI برقرار نشد: {e}"}
+
+
+def _friendly_stream_error(err, model=None):
+    """
+    خطای شبکهٔ استریم AI را به عنوان/راهنمای قابل‌فهم ترجمه می‌کند.
+
+    فقط خطاهای شبکه‌ای (Timeout، قطع اتصال، HTTP 0) ترجمه می‌شوند؛
+    خطاهای HTTP که _describe_ai_error از قبل پیام مشخص و دقیقی برایشان
+    ساخته (مثل 402 یا 429) دست‌نخورده می‌مانند.
+
+    خروجی: (متن_نهایی, جزئیات_فنی یا None)
+    """
+    if not err:
+        return err, None
+    if ("برقرار نشد" in err) or ("Timeout" in err) or ("timed out" in err) \
+            or ("HTTP 0" in err):
+        fe = model_info.friendly_api_error(err, model)
+        return f"⚠️ {fe['title']}\n\n💡 {fe['hint']}", fe["detail"]
+    return err, None
 
 
 _TOOLS_CACHE = {"by_id": None, "commands": None}
@@ -7988,6 +9197,11 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                 hint = "— سهمیهٔ روزانهٔ مدل‌های رایگان تمام شده؛ کمی بعد یا فردا دوباره امتحان کنید، یا در تنظیمات یک مدل/سرویس دیگر انتخاب کنید."
                 return base + hint + (" | جزئیات: " + detail.strip() if detail else "")
             return base + " | " + detail.strip() if detail else base + "."
+        if status == 402:
+            base = "⚠️ مدل یا پلن انتخاب‌شده اعتبار کافی ندارد (402)"
+            hint = "— در NaraRouter/Bynara نام Free به‌تنهایی تضمین دسترسی نیست؛ " \
+                   "مدلِ مجاز پلن خود یا سرویس دیگری را انتخاب کنید."
+            return base + hint + (" | جزئیات: " + detail.strip() if detail else "")
         if status in (401, 403):
             base = "⚠️ سرویس AI دسترسی را رد کرد (" + str(status) + ")"
             hint = "— کلید API را در تنظیمات بررسی کنید یا مدل/سرویس دیگری انتخاب کنید."
@@ -8012,10 +9226,12 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
         content = []
         err = None
         try:
-            for ev in proxy.forward_ai_stream(
-                    chat_url, headers, payload,
-                    use_socks=get_settings().get("use_socks", True)):
+            for ev in ai_forward_stream(chat_url, headers, payload):
                 t = ev.get("type")
+                if t == "note":
+                    # خبرِ سوییچ خودکار مدل — به کاربر نشان بده
+                    self._sse_send("note", {"text": ev.get("text", "")})
+                    continue
                 if t == "error":
                     err = ev.get("error", "ارتباط برقرار نشد.")
                     break
@@ -8046,13 +9262,38 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
         # تا فرانت فقط یک‌بار finalize کند (جلوگیری از removeChild دوباره).
         if err:
             log_event(f"AI stream failed: {err}")
-            self._sse_send("done", {"reply": "", "reasoning": "".join(reasoning),
-                                    "error": err})
+            ferr, fdet = _friendly_stream_error(err, (payload or {}).get("model"))
+            done_err = {"reply": "", "reasoning": "".join(reasoning),
+                        "error": ferr}
+            if fdet:
+                done_err["error_detail"] = fdet
+            self._sse_send("done", done_err)
             return
-        done = {"reply": "".join(content), "reasoning": "".join(reasoning)}
+        full_reply = "".join(content)
+        # تکرار غیرعادیِ پیاپی (مدل/مسیر خراب رایگان) را فشرده کن تا
+        # کاربر دیوارِ متنِ تکراری نبیند — با برچسب شفاف.
+        full_reply, reps = model_info.collapse_repeated_text(full_reply)
+        if reps:
+            log_event(f"AI stream reply collapsed {reps} repetition run(s).")
+        # پاسخ ۲۰۰ ولی بدون متن، «تحلیلی دریافت نشد» مبهم تولید می‌کرد.
+        # این حالت معمولاً مدل/route ناسازگار، پاسخ صرفاً reasoning یا
+        # پاسخ ناقص سرویس‌دهنده است؛ آن را صریحاً گزارش کن.
+        if not full_reply.strip():
+            detail = "سرویس AI پاسخ متنی قابل‌نمایش برنگرداند. " \
+                     "مدل انتخابی را تغییر دهید یا وضعیت سرویس/اعتبار را بررسی کنید."
+            log_event("AI stream completed without visible content.")
+            done = {"reply": "", "reasoning": "".join(reasoning), "error": detail}
+            if extra_done:
+                try:
+                    done.update(extra_done("") or {})
+                except Exception:
+                    pass
+            self._sse_send("done", done)
+            return
+        done = {"reply": full_reply, "reasoning": "".join(reasoning)}
         if extra_done:
             try:
-                done.update(extra_done("".join(content)) or {})
+                done.update(extra_done(full_reply) or {})
             except Exception as e:
                 log_event(f"Stream extra_done failed: {e}")
         self._sse_send("done", done)
@@ -8109,10 +9350,13 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
             pending = ""    # انتهای معلقِ شاید-نشانگر
             marker = None
             try:
-                for ev in proxy.forward_ai_stream(
-                        chat_url, headers, dict(payload, messages=current),
-                        use_socks=get_settings().get("use_socks", True)):
+                for ev in ai_forward_stream(
+                        chat_url, headers, dict(payload, messages=current)):
                     t = ev.get("type")
+                    if t == "note":
+                        # خبرِ سوییچ خودکار مدل — به کاربر نشان بده
+                        self._sse_send("note", {"text": ev.get("text", "")})
+                        continue
                     if t == "error":
                         err = ev.get("error", "ارتباط برقرار نشد.")
                         break
@@ -8210,15 +9454,22 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 log_event(f"Offline fallback failed: {e}")
 
+        final_reply, reps = model_info.collapse_repeated_text(
+            system_query.strip_requests(final_text))
+        if reps:
+            log_event(f"AI chat reply collapsed {reps} repetition run(s).")
         done = {
-            "reply": system_query.strip_requests(final_text),
+            "reply": final_reply,
             "reasoning": "".join(reasoning),
             "info_collected": collected,
         }
         if mem_info:
             done["memory"] = mem_info
         if err:
-            done["error"] = err
+            ferr, fdet = _friendly_stream_error(err, (payload or {}).get("model"))
+            done["error"] = ferr
+            if fdet:
+                done["error_detail"] = fdet
             log_event(f"AI stream failed: {err}")
         self._sse_send("done", done)
 
@@ -8741,7 +9992,7 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                         pass
                 payload = {
                     "model": body.get("model")
-                             or get_settings().get("model", "llama-3.3-70b-versatile"),
+                             or get_settings().get("model", DEFAULT_AI_MODEL),
                     "messages": sys_msg
                                  + [{"role": "user", "content": "\n".join(parts)}],
                     "temperature": 0.3,
@@ -8896,6 +10147,78 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                 log_event(f"Dev exec error: {e}")
                 self.send_json_res({"success": False, "error": f"اجرا ناموفق: {e}"})
 
+        # ═══════════ Microsoft Defender / Virus & Threat Protection ═══════════
+        elif path == "/api/defender/status":
+            self.send_json_res(defender_inspector.status())
+
+        elif path == "/api/defender/threats":
+            self.send_json_res(defender_inspector.threats())
+
+        elif path == "/api/defender/exclusions":
+            self.send_json_res(defender_inspector.exclusions())
+
+        elif path == "/api/defender/analyze":
+            # فقط دادهٔ خلاصه و ناشناس‌شده؛ مسیر فایل یا محتوای مشکوک ارسال نمی‌شود.
+            ds = defender_inspector.status()
+            dt = defender_inspector.threats()
+            de = defender_inspector.exclusions()
+            s = ds.get("status") or {}
+            threat_rows = [
+                {"id": x.get("id"), "status": x.get("status"),
+                 "detected": x.get("detected"), "resource_count": x.get("resource_count")}
+                for x in (dt.get("threats") or [])
+            ]
+            ex_rows = [{"type": x.get("type"), "severity": x.get("severity")}
+                       for x in (de.get("items") or [])]
+            report = {
+                "defender": {
+                    "antivirus_enabled": s.get("antivirus_enabled"),
+                    "realtime_enabled": s.get("realtime_enabled"),
+                    "cloud_enabled": s.get("cloud_enabled"),
+                    "signatures_updated": s.get("signatures_updated"),
+                    "quick_scan": s.get("quick_scan"),
+                    "full_scan": s.get("full_scan"),
+                },
+                "threats": threat_rows,
+                "exclusion_summary": {
+                    "count": len(ex_rows),
+                    "warning_count": sum(1 for x in ex_rows if x.get("severity") == "warning"),
+                    "types": [x.get("type") for x in ex_rows],
+                },
+            }
+            prompt = (
+                "گزارش خلاصه و ناشناس‌شدهٔ Microsoft Defender زیر را تحلیل کن. "
+                "هیچ فایل یا مسیر واقعی در اختیار تو نیست. وضعیت را بر اساس "
+                "Active/Quarantined/Removed/Allowed توضیح بده و گام‌های امن "
+                "و مرحله‌ای پیشنهاد کن. هرگز پیشنهاد خاموش‌کردن Defender، "
+                "Allow کردن تهدید، افزودن Exclusion یا حذف خودکار فایل نده.\n\n"
+                + json.dumps(report, ensure_ascii=False, indent=2)
+            )
+            reply = _ai_complete([{"role": "user", "content": prompt}],
+                                 persona_key="security", body=body)
+            if reply.get("error"):
+                log_event("Defender AI analysis failed: " + str(reply["error"])[:350])
+            else:
+                log_event("Defender AI analysis completed.")
+            self.send_json_res({"success": bool(reply.get("reply")),
+                                "reply": reply.get("reply", ""),
+                                "error": reply.get("error", ""),
+                                "report": report})
+
+        elif path == "/api/defender/update_signatures":
+            res = defender_inspector.update_signatures()
+            log_event("Defender signature update: " + ("success" if res.get("success") else "failed"))
+            self.send_json_res(res)
+
+        elif path == "/api/defender/scan":
+            # UI تأیید صریح می‌گیرد؛ این endpoint فقط Quick/Full/Custom معتبر را می‌پذیرد.
+            res = defender_runner.start_scan(body.get("type", "quick"), body.get("path", ""))
+            log_event("Defender scan requested: " + str(body.get("type", "quick")))
+            self.send_json_res(res)
+
+        elif path == "/api/defender/job_status":
+            self.send_json_res(defender_runner.job_status(body.get("job_id", "")))
+
         # ═══════════ نقطهٔ بازگشت سیستم ═══════════
         elif path == "/api/restore_status":
             st_rp = restore_point.protection_status()
@@ -9049,7 +10372,7 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
 
             chat_url, _ = normalize_ai_endpoints(st.get("base_url"))
             payload = {
-                "model": body.get("model") or st.get("model", "llama-3.3-70b-versatile"),
+                "model": body.get("model") or st.get("model", DEFAULT_AI_MODEL),
                 "messages": [{"role": "system", "content": persona["prompt"]},
                              {"role": "user", "content": user_msg}],
                 "temperature": 0.2,
@@ -9059,9 +10382,8 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                     payload, {"Authorization": f"Bearer {api_key}"}, chat_url,
                     extra_done=lambda full: {"job": out})
                 return
-            res = proxy.forward_ai_request(chat_url, {"Authorization": f"Bearer {api_key}"},
-                                           payload, method='POST',
-                                           use_socks=st.get("use_socks", True))
+            res = ai_forward_request(
+                chat_url, {"Authorization": f"Bearer {api_key}"}, payload, st=st)
             if res.get("status") == 200:
                 try:
                     data = json.loads(res.get("data", "{}"))
@@ -9306,6 +10628,18 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                       f"{report['tdr_count']} TDR events.")
             self.send_json_res({"success": True, "report": report})
 
+        elif path == "/api/gpu_live":
+            # سنجه‌های سبک و واقعی برای refresh زندهٔ داشبورد GPU.
+            # برخلاف gpu_report، Event Viewer و process counters سنگین را
+            # دوباره نمی‌خواند؛ بنابراین هر چند ثانیه قابل فراخوانی است.
+            live = gpu_inspector.get_nvidia_live()
+            self.send_json_res({
+                "success": True,
+                "timestamp": time.time(),
+                "nvidia_live": live,
+                "available": bool(live and live.get("cards")),
+            })
+
         elif path == "/api/gpu_ai_analyze":
             # تحلیل هوشمند وضعیت گرافیک توسط AI
             report = gpu_inspector.get_full_gpu_report()
@@ -9353,14 +10687,12 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                     + "\n```\nلطفاً مشکلات را تحلیل کنید، علت هر کدام را توضیح دهید "
                       "و دستورات اصلاحی ویندوز را پیشنهاد دهید."}
             ]
-            payload = {"model": st.get("model", "llama-3.3-70b-versatile"),
+            payload = {"model": st.get("model", DEFAULT_AI_MODEL),
                        "messages": messages, "temperature": 0.2}
             headers = {"Authorization": f"Bearer {api_key}"}
 
             log_event("Sending GPU diagnostic to AI...")
-            res = proxy.forward_ai_request(chat_url, headers, payload,
-                                           method='POST',
-                                           use_socks=st.get("use_socks", True))
+            res = ai_forward_request(chat_url, headers, payload, st=st)
             if res.get("status") == 200:
                 try:
                     data = json.loads(res.get("data", "{}"))
@@ -9370,9 +10702,38 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            self.send_json_res({"success": True, "report": report,
-                                "reply": "⚠️ ارتباط با API برقرار نشد. "
-                                         "گزارش محلی در جدول بالا نمایش داده شده است."})
+            # خطای واقعی را پنهان نکن: پیام قبلی فقط می‌گفت «ارتباط برقرار نشد»
+            # و کاربر نمی‌فهمید کلید، مدل، VeePN/پروکسی یا سهمیه مشکل دارد.
+            raw_err = res.get("error") or res.get("data") or ""
+            fe = model_info.friendly_api_error(raw_err, payload.get("model"))
+            status = res.get("status", 0)
+            # بعضی سرویس‌ها در 402 بدنهٔ کوتاه/خالی می‌دهند؛ کد HTTP در
+            # این حالت از متن خام معتبرتر است و باید پیام پرداخت را نشان دهیم.
+            if status == 402:
+                fe = {"title": "پرداخت یا اعتبار حساب برای این مدل لازم است",
+                      "hint": "اعتبار سرویس‌دهنده را شارژ کنید، مدل رایگان انتخاب کنید، "
+                              "یا سرویس رایگان مانند Groq/Ollama را امتحان کنید.",
+                      "detail": (raw_err or "Payment Required")[:300]}
+            via = res.get("via", "")
+            detail = (raw_err or "پاسخی از سرویس دریافت نشد.").strip()[:350]
+            log_event(f"GPU AI API error {status} via {via}: {fe['title']}")
+            self.send_json_res({
+                "success": True,
+                "report": report,
+                "api_error": {
+                    "status": status,
+                    "via": via,
+                    "title": fe["title"],
+                    "hint": fe["hint"],
+                    "detail": detail,
+                },
+                "reply": "⚠️ تحلیل آنلاین GPU انجام نشد.\n\n"
+                         f"**علت:** {fe['title']}"
+                         + (f" (HTTP {status})" if status else "")
+                         + f"\n\n💡 **راهکار:** {fe['hint']}"
+                         + (f"\n\nمسیر اتصال: {via}" if via else "")
+                         + "\n\nگزارش محلی کارت گرافیک همچنان در بخش‌های بالا در دسترس است.",
+            })
 
         elif path == "/api/personas":
             self.send_json_res({
@@ -9403,6 +10764,15 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
             api_key  = body.get("api_key")  or st.get("api_key")
             base_url = body.get("base_url") or st.get("base_url")
             provider = (body.get("api_provider") or st.get("api_provider") or "groq").lower()
+            # سرویس را از روی خودِ آدرس تشخیص بده — میزبان حقیقت است.
+            # اگر کاربر آدرس را به سرویس دیگری عوض کرده ولی انتخاب
+            # قدیمی provider مانده، منطق رایگان/پولی سرویس اشتباهی
+            # اعمال می‌شد (نمونه: فهرست OpenAI با provider=gemini).
+            detected_provider = providers.detect_provider_by_url(base_url)
+            if detected_provider and detected_provider != provider:
+                log_event(f"Provider auto-detected from URL: {detected_provider} "
+                          f"(was {provider})")
+                provider = detected_provider
 
             def _fallback(kind, message, verified=False):
                 """
@@ -9412,6 +10782,9 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                 """
                 known = providers.default_models(provider) or []
                 enriched, _ = model_info.enrich_models(known, provider)
+                # نتیجهٔ کاوش‌های قبلی (تست واقعی رایگان‌بودن) را اعمال کن
+                enriched = model_info.apply_probes(
+                    enriched, get_settings().get("free_probes") or {})
                 return {
                     "success": True,
                     "verified": verified,          # آیا از خود سرور آمده؟
@@ -9448,7 +10821,42 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                     raw = json.loads(res.get("data", "{}"))
                     items = raw.get("data") or raw.get("models") or []
                     enriched, skipped = model_info.enrich_models(items, provider)
+                    # نتیجهٔ کاوش‌های واقعیِ قبلی (رایگان/پولی بودن برای
+                    # همین حساب) را روی فهرست اعمال کن — روی روترهای
+                    # حساب‌محور مثل Bynara این تنها راه تشخیص درست است.
+                    enriched = model_info.apply_probes(
+                        enriched, st.get("free_probes") or {})
                     if enriched:
+                        # مهاجرت پیشگیرانه: اگر مدل ذخیره‌شده در فهرست زندهٔ
+                        # سرویس نبود (بازنشسته/حذف شده)، به بهترین گزینهٔ
+                        # موجود مهاجرت کن — عمومی برای هر سرویس‌دهنده.
+                        switched_info = None
+                        saved_model = st.get("model") or ""
+                        if (saved_model
+                                and saved_model not in {m["id"] for m in enriched}):
+                            cand = None
+                            for m in enriched:      # ۱) کاوش‌تأییدشده
+                                if m.get("free_verified") is True:
+                                    cand = m["id"]; break
+                            if not cand:            # ۲) رایگانِ اعلامی سرویس
+                                for m in enriched:
+                                    if m.get("free"):
+                                        cand = m["id"]; break
+                            if not cand and enriched:   # ۳) اولین مدل چت
+                                cand = enriched[0]["id"]
+                            if cand:
+                                try:
+                                    merged = get_settings()
+                                    merged["model"] = cand
+                                    save_settings(merged)
+                                    log_event(f"Settings model migrated at fetch: "
+                                              f"'{saved_model}' -> '{cand}'")
+                                    msg += (f" ⚠️ مدل ذخیره‌شدهٔ شما «{saved_model}» "
+                                            f"در فهرست سرویس نبود (بازنشسته شده؟)؛ "
+                                            f"به «{cand}» تغییر یافت.")
+                                    switched_info = {"from": saved_model, "to": cand}
+                                except Exception as e:
+                                    log_event(f"Model migration at fetch failed: {e}")
                         free_n = sum(1 for m in enriched if m["free"])
                         log_event(f"Models verified: {len(enriched)} chat "
                                   f"({free_n} free, {len(skipped)} non-chat filtered)")
@@ -9469,6 +10877,8 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                             "free_count": free_n,
                             "skipped": skipped[:20],
                             "skipped_count": len(skipped),
+                            "model_switched": switched_info,
+                            "detected_provider": detected_provider,
                         })
                         return
                     msg = "سرویس پاسخ داد ولی فهرست مدلی برنگرداند"
@@ -9478,6 +10888,76 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
 
             log_event(f"Model fetch failed ({code}/{kind}): {msg}")
             self.send_json_res(_fallback(kind, msg))
+
+        elif path == "/api/probe_models":
+            # ── کاوش واقعی رایگان‌بودن مدل‌ها ──
+            # برای روترهای حساب‌محور (مثل Bynara) نام مدل یا قیمتِ
+            # اعلامی، ملاک درستی نیست؛ تنها راه قطعی، فرستادن یک
+            # درخواست کوچک واقعی به خود مدل و دیدن کد پاسخ است:
+            #   200/429 → رایگان برای این حساب · 402 → نیازمند اعتبار
+            st = get_settings()
+            api_key = body.get("api_key") or st.get("api_key")
+            base_url = body.get("base_url") or st.get("base_url")
+            models = [m for m in (body.get("models") or [])
+                      if isinstance(m, str) and m.strip()][:12]
+            if not api_key:
+                self.send_json_res({"success": False,
+                                    "error": "کلید API تنظیم نشده است."}, 400)
+                return
+            if not models:
+                self.send_json_res({"success": False,
+                                    "error": "فهرست مدل‌ها خالی است."}, 400)
+                return
+
+            chat_url, _ = normalize_ai_endpoints(base_url)
+            headers = {"Authorization": f"Bearer {api_key}"}
+            results = {}
+            for mid in models:
+                # ۱۶ توکن: ۱ توکن برای مدل‌های reasoning/گیت‌وی‌های
+                # مدرن خیلی کم است و پاسخ خالی یا خطای 400 می‌دهد.
+                payload = {"model": mid,
+                           "messages": [{"role": "user", "content": "hi"}],
+                           "max_tokens": 16, "stream": False}
+                status = 0
+                for attempt_payload in (payload, dict(payload,
+                        max_completion_tokens=1, **{"max_tokens": None})):
+                    if attempt_payload.get("max_tokens") is None:
+                        attempt_payload.pop("max_tokens", None)
+                    try:
+                        res = proxy.forward_ai_request(
+                            chat_url, headers, attempt_payload, method="POST",
+                            use_socks=st.get("use_socks", True), timeout=30)
+                        status = res.get("status", 0)
+                    except Exception as e:
+                        status = 0
+                        log_event(f"Model probe error ({mid}): {e}")
+                    # مدل‌های جدید OpenAI پارامتر max_tokens را نمی‌پذیرند؛
+                    # یک بار با max_completion_tokens دوباره امتحان کن.
+                    if not (status == 400 and "max_tokens" in
+                            str(res.get("data") or res.get("error") or "").lower()):
+                        break
+                verdict, reason = model_info.classify_probe_status(
+                    status,
+                    "" if status == 200 else (res.get("data")
+                                              or res.get("error") or ""))
+                results[mid] = {"verdict": verdict, "status": status,
+                                "reason": reason}
+                log_event(f"Model probe {mid}: HTTP {status} → "
+                          f"{'رایگان' if verdict else ('پولی/بدون دسترسی' if verdict is False else 'نامشخص')}")
+
+            # کش نتیجه در فایل تنظیمات — همان کاش مشترک لایهٔ بازیابی
+            for mid, r in results.items():
+                _cache_probe_result(mid, r["verdict"], r["status"])
+
+            free_n = sum(1 for r in results.values() if r["verdict"] is True)
+            paid_n = sum(1 for r in results.values() if r["verdict"] is False)
+            self.send_json_res({
+                "success": True,
+                "results": results,
+                "probed": len(results),
+                "free_count": free_n,
+                "paid_count": paid_n,
+            })
 
         elif path == "/api/ai_chat":
             st = get_settings()
@@ -9601,7 +11081,7 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
 
             payload = {
                 # سوئیچ سریع مدل: اگر UI مدلی فرستاد، بر تنظیمات ذخیره‌شده اولویت دارد
-                "model": body.get("model") or st.get("model", "llama-3.3-70b-versatile"),
+                "model": body.get("model") or st.get("model", DEFAULT_AI_MODEL),
                 "messages": full_messages,
                 "temperature": 0.3
             }
@@ -9627,7 +11107,7 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._stream_ai_chat(payload, headers, chat_url, full_messages, mem_info)
                 return
 
-            res = proxy.forward_ai_request(chat_url, headers, payload, method='POST', use_socks=st.get("use_socks", True))
+            res = ai_forward_request(chat_url, headers, payload, st=st)
             
             if not api_key or res.get("status") in (429, 403, 401) or "insufficient credits" in str(res.get("data", "")).lower() or "forbidden" in str(res.get("data", "")).lower():
                 log_event(f"API Error ({res.get('status')}). Switching to Local Intelligent Windows Repair Assistant.")
@@ -9661,9 +11141,8 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
 
                         payload2 = dict(payload)
                         payload2["messages"] = followup
-                        res2 = proxy.forward_ai_request(
-                            chat_url, headers, payload2, method='POST',
-                            use_socks=st.get("use_socks", True))
+                        res2 = ai_forward_request(
+                            chat_url, headers, payload2, st=st)
                         if res2.get("status") != 200:
                             break
                         try:
@@ -9737,7 +11216,7 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             payload = {
-                "model": st.get("model", "llama-3.3-70b-versatile"),
+                "model": st.get("model", DEFAULT_AI_MODEL),
                 "messages": messages,
                 "temperature": 0.2
             }
@@ -9746,7 +11225,7 @@ class IntegratedRequestHandler(http.server.BaseHTTPRequestHandler):
                 headers["Authorization"] = f"Bearer {api_key}"
 
             log_event(f"Sending AI Diagnostic query to: {chat_url}...")
-            res = proxy.forward_ai_request(chat_url, headers, payload, method='POST', use_socks=st.get("use_socks", True))
+            res = ai_forward_request(chat_url, headers, payload, st=st)
             
             if res.get("status") in (429, 403, 401) or "insufficient credits" in str(res.get("data", "")).lower() or "forbidden" in str(res.get("data", "")).lower():
                 log_event(f"API Error ({res.get('status')}). Falling back to local diagnosis.")
@@ -9800,18 +11279,37 @@ class _ToolboxServer(socketserver.ThreadingTCPServer):
 
 
 def start_server():
+    """راه‌اندازی سرور محلی با بازیابی از اشغال‌شدن پورت.
+
+    در نسخهٔ EXE ممکن است اجرای قبلی هنوز در حال بستن باشد، یا برنامهٔ
+    دیگری بین مرحلهٔ انتخاب پورت و bind آن پورت را بگیرد. قبلاً Thread
+    در این حالت با OSError می‌مرد و WebView صفحهٔ Connection Refused
+    نشان می‌داد. اکنون در صورت برخورد، یک پورت آزاد واقعی از سیستم
+    می‌گیریم و PORT را پیش از آماده‌شدن UI به‌روز می‌کنیم.
+    """
+    global PORT
     # زنجیره‌هایی که در جلسهٔ قبلی سرور وسط اجرا رها شده‌اند (پنجرهٔ UAC
     # بسته شده) را interrupted کن تا برای همیشه «running» نمانند.
     try:
         cleaned = repair_runner.sweep_stale_jobs()
         if cleaned:
-            print(f"[Server] زنجیره‌های ناتمام پاکسازی شد: {', '.join(cleaned)}")
+            print(f"[Server] stale jobs cleaned: {', '.join(cleaned)}")
         else:
-            print("[Server] هیچ زنجیرهٔ ناتمامی یافت نشد.")
+            print("[Server] no stale jobs found.")
     except Exception as e:
-        print(f"[Server] خطا در پاکسازی زنجیره‌های ناتمام: {e}")
+        print(f"[Server] stale-job cleanup error: {e}")
 
-    server = _ToolboxServer(("127.0.0.1", PORT), IntegratedRequestHandler)
+    try:
+        server = _ToolboxServer(("127.0.0.1", PORT), IntegratedRequestHandler)
+    except OSError as e:
+        old_port = PORT
+        # port 0 means: let Windows atomically allocate a free port. This
+        # avoids the check-then-bind race of trying 8080/8081 manually.
+        server = _ToolboxServer(("127.0.0.1", 0), IntegratedRequestHandler)
+        PORT = server.server_address[1]
+        log_event(f"WARNING: port {old_port} unavailable ({e}); switched to {PORT}.")
+
+    log_event(f"Backend listening on http://127.0.0.1:{PORT}")
     print(f"[Server] Backend running at http://127.0.0.1:{PORT}")
     server.serve_forever()
 

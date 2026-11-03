@@ -46,10 +46,59 @@ from tkinter import ttk, messagebox, scrolledtext
 
 
 # Start Backend Server in Background Thread
-def start_backend_thread():
-    t = threading.Thread(target=backend_server.start_server, daemon=True)
-    t.start()
-    time.sleep(0.5)
+# WebView2 گاهی زودتر از Thread سرور صفحه را باز می‌کرد؛ یک Connection
+# Refused اولیه در WebView صفحهٔ خطا باقی می‌گذاشت و خودکار retry نمی‌شد.
+_BACKEND_THREAD = None
+_BACKEND_LOCK = threading.Lock()
+
+
+def _backend_entry():
+    """Wrapper تا خطای Thread سرور در نسخه --noconsole گم نشود."""
+    try:
+        backend_server.start_server()
+    except Exception as e:
+        backend_server.log_event(f"FATAL: Backend startup failed: {type(e).__name__}: {e}")
+
+
+def _show_startup_error(message):
+    """پیام قابل‌دیدن در EXE windowed؛ کنسول برای دیدن traceback ندارد."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, message, "PC Repair Toolbox Pro - Startup error", 0x10)
+    except Exception:
+        pass
+
+
+def start_backend_thread(timeout=10):
+    """سرور را فقط یک‌بار آغاز و تا شنیدن واقعی پورت صبر می‌کند."""
+    global _BACKEND_THREAD
+    import socket
+
+    with _BACKEND_LOCK:
+        if _BACKEND_THREAD is None or not _BACKEND_THREAD.is_alive():
+            _BACKEND_THREAD = threading.Thread(
+                target=_backend_entry, daemon=True, name="PCRepairBackend")
+            _BACKEND_THREAD.start()
+
+    deadline = time.monotonic() + timeout
+    last_error = ""
+    while time.monotonic() < deadline:
+        if not _BACKEND_THREAD.is_alive():
+            last_error = "رشتهٔ سرور پیش از آماده‌شدن متوقف شد."
+            break
+        try:
+            with socket.create_connection(("127.0.0.1", backend_server.PORT), timeout=0.35):
+                backend_server.log_event(f"Backend ready on port {backend_server.PORT}.")
+                return True
+        except OSError as e:
+            last_error = str(e)
+            time.sleep(0.12)
+
+    backend_server.log_event(
+        f"ERROR: Backend was not ready on port {backend_server.PORT}: {last_error}")
+    return False
 
 # WEBVIEW ENGINE (PRIORITY 1)
 class WebviewApi:
@@ -171,7 +220,13 @@ def open_in_browser():
     url = f"http://127.0.0.1:{backend_server.PORT}/"
     backend_server.log_event(f"Falling back to system browser: {url}")
     try:
-        webbrowser.open(url)
+        # در EXE با UAC، webbrowser.open گاهی بدون بازکردن پنجره برمی‌گردد.
+        # os.startfile از association خود ویندوز استفاده می‌کند و در عمل
+        # برای Edge/Chrome قابل‌اعتمادتر است.
+        if os.name == "nt":
+            os.startfile(url)
+        else:
+            webbrowser.open(url)
     except Exception as e:
         backend_server.log_event(f"Browser fallback failed: {e}")
         print(f"\nرابط کاربری در این آدرس در دسترس است:\n  {url}\n")
@@ -206,10 +261,47 @@ def open_in_browser():
         pass
 
 
+def _patch_webview_context_menu():
+    """
+    فعال‌کردن راست‌کلیک و انتخاب متن در WebView2.
+
+    pywebview به‌صورت پیش‌فرض:
+      • با text_select=False (پیش‌فرض) CSS «user-select: none» تزریق
+        می‌کند → انتخاب متن غیرممکن می‌شود.
+      • منوی راست‌کلیک را فقط در حالت debug فعال می‌کند
+        (settings.AreDefaultContextMenusEnabled = _state['debug']).
+
+    این تابع هندلر on_webview_ready پلتفرم EdgeChromium را طوری
+    می‌پیچد که بعد از تنظیمات پیش‌فرض pywebview، منوی راست‌کلیک
+    دوباره فعال شود — بدون فعال‌کردن DevTools و بقیهٔ حالت debug.
+    (پچ روی همان رشتهٔ UI اجرا می‌شود چون جایگزین همان event
+    handler است؛ در نسخه‌های قدیمی‌تر pywebview بی‌اثر و بی‌ضرر است.)
+    """
+    try:
+        from webview.platforms import edgechromium as _ec
+        _orig_ready = _ec.EdgeChromium.on_webview_ready
+
+        def _ready_with_menu(self, sender, args):
+            _orig_ready(self, sender, args)
+            try:
+                sender.CoreWebView2.Settings.AreDefaultContextMenusEnabled = True
+                backend_server.log_event("WebView2 context menu enabled.")
+            except Exception as e:
+                backend_server.log_event(f"Context menu enable failed: {e}")
+
+        _ec.EdgeChromium.on_webview_ready = _ready_with_menu
+        return True
+    except Exception as e:
+        backend_server.log_event(f"webview context-menu patch skipped: {e}")
+        return False
+
+
 def run_webview_app():
-    start_backend_thread()
+    if not start_backend_thread():
+        raise RuntimeError("سرور محلی برنامه در زمان لازم آماده نشد؛ فایل لاگ برنامه را بررسی کنید.")
     storage = _prepare_webview_storage()
     api = WebviewApi()
+    _patch_webview_context_menu()
 
     try:
         kwargs = dict(
@@ -217,6 +309,9 @@ def run_webview_app():
             js_api=api,
             width=1250,
             height=850,
+            # انتخاب متن در صفحه — پیش‌فرض pywebview خاموش است و CSS
+            # user-select:none تزریق می‌کند؛ با True دیگر تزریق نمی‌شود.
+            text_select=True,
         )
         # storage_path در pywebview 4+ پشتیبانی می‌شود
         if storage:
@@ -724,30 +819,30 @@ def main():
         except Exception as e:
             backend_server.log_event(f"Webview engine crashed: {e}")
 
-    if HAS_PYQT:
-        try:
-            start_backend_thread()
-            app = QApplication(sys.argv)
-            window = MainWindowPyQt()
-            window.show()
-            sys.exit(app.exec())
-        except SystemExit:
-            raise
-        except Exception as e:
-            backend_server.log_event(f"PyQt6 engine failed: {e}")
-
-    try:
-        start_backend_thread()
-        app = TkAppRTL()
-        app.mainloop()
-        return
-    except Exception as e:
-        backend_server.log_event(f"Tkinter engine failed: {e}")
-
-    # آخرین راه: مرورگر سیستم
-    start_backend_thread()
-    open_in_browser()
+    # برای اینکه ظاهر EXE همیشه با نسخهٔ وب یکی باشد، fallback خودکار
+    # دیگر به PyQt/Tkinter نمی‌رود؛ آن‌ها رابط قدیمی و محدود دارند.
+    # Tk فقط با پرچم صریح --tk در دسترس است. اگر WebView2/pywebview
+    # فراهم نبود، مرورگر سیستم همان HTML کامل را نمایش می‌دهد.
+    if start_backend_thread():
+        open_in_browser()
+    else:
+        msg = ("سرور محلی برنامه بالا نیامد.\n\n"
+               "فایل log را بررسی کنید:\n"
+               "%LOCALAPPDATA%\\PCRepairToolbox\\pc_toolbox_history.log")
+        backend_server.log_event("ERROR: No UI opened because backend failed to start.")
+        _show_startup_error(msg)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # آخرین لایه: به جای بسته‌شدن بی‌صدا در EXE windowed، دلیل را
+        # هم در log و هم در پنجرهٔ ویندوز نشان بده.
+        detail = f"{type(e).__name__}: {e}"
+        try:
+            backend_server.log_event("FATAL: Application startup failed: " + detail)
+        except Exception:
+            pass
+        _show_startup_error("برنامه هنگام راه‌اندازی متوقف شد:\n\n" + detail)
+        raise

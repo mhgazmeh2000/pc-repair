@@ -1,4 +1,4 @@
-﻿# PC Repair Toolbox Pro - EXE Builder (PowerShell)
+# PC Repair Toolbox Pro - EXE Builder (PowerShell)
 # اجرا:  راست‌کلیک روی فایل ← Run with PowerShell
 # یا در PowerShell:  .\build.ps1
 #
@@ -7,6 +7,10 @@
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $Host.UI.RawUI.WindowTitle = "ساخت فایل اجرایی PC Repair Toolbox Pro"
+
+# همیشه از پوشهٔ خودِ اسکریپت اجرا شو — حتی اگر از مسیر دیگری صدا زده شود.
+# همهٔ فایل‌های پروژه باید کنار همین اسکریپت باشند.
+Set-Location -LiteralPath $PSScriptRoot
 
 function Write-Step($n, $text) { Write-Host "[$n/5] $text" -ForegroundColor Cyan }
 function Write-Ok($text)       { Write-Host "      $text" -ForegroundColor Green }
@@ -42,13 +46,39 @@ Write-Step 1 "پایتون شناسایی شد: $pyver"
 Write-Host ""
 
 # ---------- ۲. نصب کتابخانه‌ها ----------
+# دو دسته بسته وجود دارد:
+#   الزامی  = requests, urllib3, PyInstaller, webview, win32crypt
+#   اختیاری = socks (PySocks) — فقط برای پروکسی SOCKS لازم است و نبودش
+#             نباید ساخت را متوقف کند (برنامه با اتصال مستقیم کار می‌کند).
 Write-Step 2 "در حال نصب کتابخانه‌های مورد نیاز..."
-& $py -m pip install --upgrade pip --quiet
-& $py -m pip install -r requirements.txt --quiet
-if ($LASTEXITCODE -ne 0) {
-    Write-Err "نصب کتابخانه‌ها ناموفق بود. اتصال اینترنت را بررسی کنید."
-    Read-Host "برای خروج Enter بزنید"
-    exit 1
+
+# اگر همه‌چیز از قبل نصب است، اصلاً سراغ شبکه نمی‌رویم.
+& $py -c "import requests, urllib3, PyInstaller, webview, win32crypt" 2>$null
+$reqOk = ($LASTEXITCODE -eq 0)
+& $py -c "import socks" 2>$null
+$socksOk = ($LASTEXITCODE -eq 0)
+
+if ($reqOk -and $socksOk) {
+    Write-Ok "همهٔ بسته‌ها از قبل نصب هستند — رد شدن از دانلود."
+} else {
+    Write-Host "      برخی بسته‌ها موجود نیستند. تلاش برای دانلود..." -ForegroundColor Gray
+    & $py -m pip install -r requirements.txt --quiet --disable-pip-version-check
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "      [هشدار] نصب بسته‌ها با خطا مواجه شد (معمولاً مشکل شبکه/فایروال)." -ForegroundColor Yellow
+    }
+    # فقط بسته‌های الزامی را دوباره بررسی می‌کنیم.
+    & $py -c "import requests, urllib3, PyInstaller, webview, win32crypt" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "بسته‌های الزامی موجود نیستند. ادامه ممکن نیست."
+        Write-Host "      نصب دستی:  pip install requests urllib3 pyinstaller pywebview pywin32" -ForegroundColor Yellow
+        Read-Host "برای خروج Enter بزنید"
+        exit 1
+    }
+    & $py -c "import socks" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "      [توجه] PySocks نصب نیست؛ گزینهٔ پروکسی SOCKS5 در دسترس نخواهد بود" -ForegroundColor Yellow
+        Write-Host "             ولی برنامه با اتصال مستقیم/HTTP کار می‌کند." -ForegroundColor Yellow
+    }
 }
 Write-Ok "نصب کامل شد."
 Write-Host ""
@@ -82,7 +112,7 @@ Write-Host ""
 # backend_server وارد می‌کند اگر در hiddenimports نباشند، exe روی
 # سیستم کاربر با ImportError می‌افتد.
 Write-Host "      بررسی پیکربندی ساخت..." -ForegroundColor Gray
-& $PYCMD tests_build.py
+& $py tests_build.py
 if ($LASTEXITCODE -ne 0) {
     Write-Err "بررسی پیکربندی ناموفق بود. موارد بالا را رفع کنید."
     Read-Host "برای خروج Enter بزنید"

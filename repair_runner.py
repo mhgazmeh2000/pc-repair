@@ -321,6 +321,8 @@ def build_batch_script(step_keys, job_id):
         "    }",
         "}",
         "function Set-State([hashtable]$S) {",
+        "    # PID همین PowerShell ثبت می‌شود تا لغو فقط درخت همین job را بکشد.",
+        "    $S['pid'] = $PID",
         "    $json = $S | ConvertTo-Json -Compress",
         "    for ($i = 0; $i -lt 6; $i++) {",
         "        try {",
@@ -626,27 +628,23 @@ def cancel_job(job_id):
 
     killed = []
     if os.name == "nt":
-        # ۲. توقف پنجره cmd که اسکریپت را اجرا می‌کند
-        bat_name = os.path.basename(job.get("bat", ""))
-        if bat_name:
+        # فقط درخت فرزندِ PowerShell همین job را متوقف کن. نسخهٔ قبلی با
+        # /IM همهٔ نمونه‌های sfc/DISM/chkdsk سیستم را می‌کشت؛ بنابراین ممکن
+        # بود تعمیر دستی یا برنامهٔ دیگری قربانی لغو این job شود.
+        pid = None
+        state_file = os.path.join(_state_dir(), f"{job_id}.json")
+        try:
+            with open(state_file, "r", encoding="utf-8-sig") as f:
+                pid = int((json.load(f) or {}).get("pid") or 0) or None
+        except Exception:
+            pass
+        if pid:
             try:
-                subprocess.run(
-                    ["wmic", "process", "where",
-                     f"CommandLine like '%{bat_name}%' and Name='cmd.exe'",
-                     "call", "terminate"],
-                    capture_output=True, timeout=10, shell=False)
-                killed.append("cmd.exe")
-            except Exception:
-                pass
-
-        # ۳. توقف ابزار تعمیری که همین لحظه در حال اجراست
-        for proc in ("sfc.exe", "DISM.exe", "dism.exe", "chkdsk.exe", "cleanmgr.exe"):
-            try:
-                r = subprocess.run(["taskkill", "/F", "/IM", proc],
-                                   capture_output=True, text=True,
-                                   timeout=10, shell=False)
+                r = subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                                   capture_output=True, text=True, timeout=10,
+                                   shell=False)
                 if r.returncode == 0:
-                    killed.append(proc)
+                    killed.append(f"job process tree (PID {pid})")
             except Exception:
                 pass
 

@@ -294,6 +294,27 @@ def is_encrypted(value):
     return bool(value) and str(value).startswith(_ENC_PREFIX)
 
 
+def secret_protection_status(stored=""):
+    """وضعیت قابل نمایش حفاظت از کلید API.
+
+    fallback به متن خام نباید پنهان بماند: اگر pywin32/DPAPI در دسترس
+    نباشد، کاربر صریحاً می‌فهمد که کلید فعلی روی دیسک رمزنگاری نشده است.
+    """
+    dpapi = _dpapi_available()
+    encrypted = is_encrypted(stored)
+    if encrypted and dpapi:
+        return {"encrypted": True, "available": True,
+                "message": "کلید API با Windows DPAPI رمزنگاری شده است."}
+    if encrypted:
+        return {"encrypted": True, "available": False,
+                "message": "کلید رمزنگاری شده است، اما DPAPI در این محیط در دسترس نیست."}
+    if dpapi:
+        return {"encrypted": False, "available": True,
+                "message": "کلید ذخیره‌شده قدیمی/رمزنشده است؛ با ذخیرهٔ دوباره رمزنگاری می‌شود."}
+    return {"encrypted": False, "available": False,
+            "message": "Windows DPAPI در دسترس نیست؛ کلید API رمزنگاری‌نشده ذخیره می‌شود."}
+
+
 # ─────────────── ناشناس‌سازی داده‌های تشخیصی (ص-۳) ───────────────
 #
 # گزارش‌های تشخیصی نام کاربری، نام رایانه و مسیرهای خانگی را در بر

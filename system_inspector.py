@@ -60,6 +60,45 @@ def get_system_diagnostics():
         "health_issues": []
     }
 
+    # CPU and memory — these fields power the System Center UI as well as AI context.
+    # platform.processor() is often empty on Windows, therefore query CIM as fallback.
+    try:
+        cpu_name = platform.processor().strip()
+        if os.name == 'nt' and not cpu_name:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)"],
+                capture_output=True, text=True, timeout=6,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            cpu_name = (r.stdout or "").strip()
+        info["cpu"] = {"name": cpu_name or "نامشخص"}
+    except Exception as e:
+        info["cpu"] = {"error": str(e)}
+
+    try:
+        if os.name == 'nt':
+            import ctypes
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            mem = _MEMORYSTATUSEX()
+            mem.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+                total = round(mem.ullTotalPhys / (1024 ** 3), 1)
+                available = round(mem.ullAvailPhys / (1024 ** 3), 1)
+                info["memory"] = {
+                    "total_gb": total, "available_gb": available,
+                    "percent_used": int(mem.dwMemoryLoad),
+                }
+    except Exception as e:
+        info["memory"] = {"error": str(e)}
+
     # Disk Space C:
     try:
         if os.name == 'nt':

@@ -24,11 +24,14 @@ import copy
 BUILTIN = {
     "groq": {
         "name": "Groq",
-        "desc": "رایگان و بسیار سریع — Llama 3.3",
+        "desc": "رایگان و بسیار سریع — GPT-OSS و Qwen",
         "base_url": "https://api.groq.com/openai/v1",
-        "default_model": "llama-3.3-70b-versatile",
-        "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-                   "llama3-70b-8192", "llama3-8b-8192", "gemma2-9b-it"],
+        # llama-3.3-70b-versatile و llama-3.1-8b-instant را Groq بازنشسته
+        # کرد (تست واقعی: 404 model does not exist). فهرست فعلی چت:
+        # gpt-oss-120b (بهترین کیفیت)، gpt-oss-20b، qwen3.8-27b، allam-2-7b
+        "default_model": "openai/gpt-oss-120b",
+        "models": ["openai/gpt-oss-120b", "openai/gpt-oss-20b",
+                   "qwen/qwen3.8-27b", "allam-2-7b"],
         "key_url": "https://console.groq.com/keys",
         "needs_proxy": False,
     },
@@ -41,6 +44,19 @@ BUILTIN = {
                    "o3-mini", "gpt-3.5-turbo"],
         "key_url": "https://platform.openai.com/api-keys",
         "needs_proxy": True,
+    },
+    "bynara": {
+        "name": "NaraRouter / Bynara",
+        "desc": "OpenAI-compatible gateway — دسترسی مدل‌ها به پلن و اعتبار حساب وابسته است",
+        "base_url": "https://router.bynara.id/v1",
+        # auto/bynara روی روتر حذف شده و 404 می‌دهد (تست واقعی).
+        # مدل پیش‌فرض باید یک مدل رایگانِ فعالِ قیمت‌صفر باشد؛
+        # فهرست کامل و قیمت واقعی هر مدل با «دریافت فهرست واقعی» می‌آید.
+        "default_model": "laguna-s-2.1",
+        # jev قدیمی حذف شد؛ jev-1.14.0 از ۲۰۲۶-۱۰ پرداختی است (۰.۳ IDR/1k)
+        "models": ["laguna-s-2.1", "nemotron-3.5-lightning-free"],
+        "key_url": "https://router.bynara.id/keys",
+        "needs_proxy": False,
     },
     "openrouter": {
         "name": "OpenRouter",
@@ -65,11 +81,16 @@ BUILTIN = {
     },
     "gemini": {
         "name": "Google Gemini",
-        "desc": "سازگار با OpenAI API",
+        "desc": "سازگار با OpenAI API — پلن رایگان با سقف نرخ",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "default_model": "gemini-2.0-flash",
-        "models": ["gemini-2.0-flash", "gemini-2.0-flash-lite",
-                   "gemini-1.5-pro", "gemini-1.5-flash"],
+        # gemini-2.0/1.5 و حتی 2.5 برای کاربران جدید بازنشسته شده‌اند
+        # (تست واقعی: 404 «no longer available to new users»). مدل‌های
+        # زندهٔ تست‌شده: gemini-flash-latest ( alias همیشه‌به‌روز )،
+        # 3.8-flash، 3.5-flash و lite ها. از ایران نیازمند پروکسی است.
+        "default_model": "gemini-flash-latest",
+        "models": ["gemini-flash-latest", "gemini-3.8-flash",
+                   "gemini-3.5-flash", "gemini-3.1-flash-lite",
+                   "gemini-flash-lite-latest"],
         "key_url": "https://aistudio.google.com/apikey",
         "needs_proxy": True,
     },
@@ -236,6 +257,60 @@ def get_provider(key):
     for p in list_providers():
         if p["key"] == key:
             return p
+    return None
+
+
+# مدل‌هایی که سرویس‌دهنده‌ها بازنشسته/حذف کرده‌اند (تست واقعی: 404
+# «model does not exist»). تنظیمات ذخیره‌شدهٔ کاربرانی که هنوز این
+# مدل‌ها را دارند، موقع خواندن تنظیمات به مدل پیش‌فرضِ فعلی همان
+# سرویس مهاجرت می‌کند تا برنامه به‌جای خطای 404 دوباره کار کند.
+DEPRECATED_MODELS = {
+    # Groq بازنشسته کرد
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "llama3-70b-8192",
+    "llama3-8b-8192",
+    "mixtral-8x7b-32768",
+    "gemma-7b-it",
+    "gemma2-9b-it",
+    # روتر Bynara حذف کرد
+    "auto/bynara",
+    "jev",                              # ← jev-1.14.0 پرداختی جایگزین شد
+    "muse-spark-1.3-contributor-free",  # پیشنهاد رایگان موقتی تمام شد
+    "mimo-v2.5", "mimo-v2.5-pro",       # با mimo-v2.6 جایگزین شدند
+    # Google Gemini — برای کاربران جدید بازنشسته (404 no longer available)
+    "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite",
+    "gemini-2.0-flash", "gemini-2.0-flash-lite",
+    "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-8b",
+    "gemini-3.8-flash-lite", "aqa",
+}
+
+
+def detect_provider_by_url(url):
+    """
+    سرویس‌دهندهٔ داخلی را از روی نام میزبان آدرس تشخیص می‌دهد.
+
+    چرا لازم است؟ کاربر که بین سرویس‌ها جابه‌جا می‌شود فقط Base URL و
+    کلید را عوض می‌کند و «انتخاب سرویس» قدیمی می‌ماند؛ آن‌وقت منطق
+    رایگان/پولی سرویس اشتباه اعمال می‌شود (نمونهٔ واقعی: فهرست
+    OpenAI با provider=gemini → همهٔ مدل‌ها 🆓 نمایش داده می‌شد!).
+
+    خروجی: کلید سرویس (مثل "openai") یا None اگر میزبان شناخته نشد.
+    """
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url or "").hostname or "").lower()
+    except Exception:
+        return None
+    if not host:
+        return None
+    for key, p in BUILTIN.items():
+        try:
+            phost = (urlparse(p.get("base_url") or "").hostname or "").lower()
+            if phost and phost == host:
+                return key
+        except Exception:
+            continue
     return None
 
 

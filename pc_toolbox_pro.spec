@@ -50,6 +50,8 @@ a = Analysis(
         'restore_point',      # نقطهٔ بازگشت ویندوز
         'repair_history',     # حافظهٔ بین‌جلسه‌ای تعمیرها
         'event_catalog',      # فرهنگ ۵۱ رویداد ویندوز
+        'defender_inspector', # وضعیت، تهدیدها و Exclusionهای Defender
+        'defender_runner',    # اجرای کنترل‌شده اسکن Defender
 
         # ── تب توسعهٔ نرم‌افزار ──
         'workspace',          # مدیریت پوشهٔ پروژه
@@ -59,6 +61,10 @@ a = Analysis(
         'socks',              # PySocks — با import پویا صدا زده می‌شود
         'urllib3',
         'requests',
+        'win32crypt',        # Windows DPAPI برای رمزنگاری API key
+        'webview',           # رابط اصلی HTML در نسخه EXE
+        'webview.platforms.edgechromium',
+        'webview.platforms.winforms',
 
         # ── tkinter برای دیالوگ بومی انتخاب مسیر ──
         # backend_server._pick_path داخل تابع import می‌کند

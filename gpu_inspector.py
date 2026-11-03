@@ -518,6 +518,26 @@ def get_full_gpu_report():
     """گزارش کامل گرافیک."""
     gpus = get_gpu_list()
     nvidia = get_nvidia_live()
+
+    # Win32_VideoController.AdapterRAM در برخی درایورها uint32 است و برای
+    # کارت‌های 8GB به بالا مقدارِ سقف‌خورده (اغلب 4GB) برمی‌گرداند. برای
+    # NVIDIA، nvidia-smi مقدار واقعی حافظه اختصاصی را می‌دهد؛ آن را با
+    # حفظ ترتیب کارت‌های NVIDIA جایگزین می‌کنیم.
+    if nvidia and nvidia.get("cards"):
+        nv_cards = list(nvidia["cards"])
+        nv_index = 0
+        for gpu in gpus:
+            if gpu.get("vendor") != "NVIDIA" or nv_index >= len(nv_cards):
+                continue
+            total_mb = nv_cards[nv_index].get("mem_total_mb")
+            nv_index += 1
+            try:
+                if total_mb and float(total_mb) > 0:
+                    gpu["vram_gb"] = round(float(total_mb) / 1024, 2)
+                    gpu["vram_source"] = "nvidia-smi"
+            except (TypeError, ValueError):
+                pass
+
     errors = get_gpu_errors()
     apps = get_gpu_apps()
     issues = analyze_gpu_health(gpus, nvidia, errors, apps)
