@@ -8467,6 +8467,11 @@ def execute_command_elevated(cmd):
 
 def normalize_ai_endpoints(base_url):
     url = (base_url or "https://api.groq.com/openai/v1").strip().rstrip("/")
+    # کاربر آدرس را بدون طرح می‌نویسد (نمونهٔ واقعی: «openrouter.ai/api/v1»).
+    # بدون https:// درخواست با MissingSchema می‌میرد و کاربر فقط
+    # «ارتباط برقرار نشد» می‌بیند.
+    if "://" not in url:
+        url = "https://" + url
     if url.endswith("/chat/completions"):
         chat_url = url
         base_prefix = url[:-17].rstrip("/")

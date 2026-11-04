@@ -1157,6 +1157,26 @@ chk('"trace": tb[-600:]' in _src18,
 # ═════════════════════════════════════════════════════════════════
 print()
 print("═" * 64)
+print("۱۹) Base URL بدون https:// — نرمال‌سازی طرح")
+print("═" * 64)
+
+_ne = _bs.normalize_ai_endpoints
+chk(_ne("openrouter.ai/api/v1")[0] == "https://openrouter.ai/api/v1/chat/completions",
+    "آدرس بدون طرح، خودکار https:// می‌گیرد (نمونهٔ واقعی گزارش کاربر)")
+chk(_ne("api.groq.com/openai/v1")[1] == "https://api.groq.com/openai/v1/models",
+    "groq بدون طرح هم درست می‌شود")
+chk(_ne("https://openrouter.ai/api/v1")[0] == "https://openrouter.ai/api/v1/chat/completions",
+    "آدرس با طرح دست‌نخورده می‌ماند")
+chk(_ne("  https://x.example/v1/  ")[0] == "https://x.example/v1/chat/completions",
+    "اسپیس اضافه و / انتهایی پاک می‌شود")
+chk(_ne("https://x.example/v1/chat/completions")[1] == "https://x.example/v1/models",
+    "آدرس کامل chat/completions هم قبلاً کار می‌کرد و هنوز کار می‌کند")
+chk(_ne("")[0].startswith("https://api.groq.com"),
+    "خالی → پیش‌فرض groq با طرح کامل")
+
+# ═════════════════════════════════════════════════════════════════
+print()
+print("═" * 64)
 print("۱۵) تشخیص خودکار سرویس از آدرس + بازنشستگی + 429 اعتباری")
 print("═" * 64)
 
