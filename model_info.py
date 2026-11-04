@@ -207,6 +207,11 @@ def enrich_models(raw_items, provider=None, chat_only=True):
     for item in (raw_items or []):
         if isinstance(item, str):
             mid, pricing, ctx, active = item, None, None, True
+            # آیتم رشته‌ای (فهرست پشتیبان محلی providers.default_models)
+            # فیلد shutdown_date ندارد — بدون این مقداردهی، «if shutdown»
+            # پایین‌تر UnboundLocalError می‌داد و fetch_models را با ۵۰۰
+            # می‌کشت (گزارش واقعی از نمایشگر خطاهای برنامه).
+            shutdown = None
         elif isinstance(item, dict):
             mid = item.get("id") or item.get("name") or ""
             pricing = item.get("pricing")

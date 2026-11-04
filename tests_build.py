@@ -1177,6 +1177,43 @@ chk(_ne("")[0].startswith("https://api.groq.com"),
 # ═════════════════════════════════════════════════════════════════
 print()
 print("═" * 64)
+print("۲۰) رگرسیون UnboundLocalError مسیر fallback")
+print("═" * 64)
+
+# آیتم رشته‌ای (فهرست پشتیبان providers.default_models) نباید crash کند
+# — گزارش واقعی از نمایشگر خطاهای 🐞 کاربر (خطای ۵۰۰ fetch_models)
+try:
+    _enr20, _skp20 = _mi.enrich_models(
+        ["model-a", "model-b-tts"], "groq")
+    chk(len(_enr20) == 1 and _enr20[0]["id"] == "model-a",
+        "آیتم‌های رشته‌ای بدون UnboundLocalError غنی می‌شوند")
+except UnboundLocalError as e:
+    chk(False, "آیتم‌های رشته‌ای بدون UnboundLocalError غنی می‌شوند", str(e))
+
+_ok20 = True
+for _prov20 in ("groq", "openai", "bynara", "gemini", "openrouter"):
+    try:
+        _k = _prov.default_models(_prov20) or []
+        _e20, _ = _mi.enrich_models(_k, _prov20)
+        if not _e20:
+            _ok20 = False
+    except Exception:
+        _ok20 = False
+chk(_ok20, "مسیر fallback همهٔ سرویس‌دهنده‌ها سالم است")
+
+# ترکیب رشته و دیکت
+try:
+    _enr21, _skp21 = _mi.enrich_models(
+        ["str-model", {"id": "retired", "shutdown_date": "2026-01-01"},
+         {"id": "ok-model"}], "custom")
+    chk({m["id"] for m in _enr21} == {"str-model", "ok-model"},
+        "ترکیب رشته/دیکت: رشته‌ها می‌مانند و shutdown_date حذف می‌شود")
+except UnboundLocalError as e:
+    chk(False, "ترکیب رشته/دیکت سالم است", str(e))
+
+# ═════════════════════════════════════════════════════════════════
+print()
+print("═" * 64)
 print("۱۵) تشخیص خودکار سرویس از آدرس + بازنشستگی + 429 اعتباری")
 print("═" * 64)
 
