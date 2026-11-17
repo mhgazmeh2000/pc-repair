@@ -1190,16 +1190,67 @@ try:
 except UnboundLocalError as e:
     chk(False, "آیتم‌های رشته‌ای بدون UnboundLocalError غنی می‌شوند", str(e))
 
-_ok20 = True
-for _prov20 in ("groq", "openai", "bynara", "gemini", "openrouter"):
-    try:
-        _k = _prov.default_models(_prov20) or []
-        _e20, _ = _mi.enrich_models(_k, _prov20)
-        if not _e20:
+# مستقل از دادهٔ محلی کاربر: سرویس‌های سفارشی را موقتاً خالی می‌کنیم
+# تا این تست روی هر ماشینی یکسان باشد (گزارش واقعی: مدخل معیوب در
+# custom_providers.jsonِ کاربر باعث شکست همین تست می‌شد).
+_orig_lc20 = _prov._load_custom
+_prov._load_custom = lambda: {}
+try:
+    _ok20 = True
+    for _prov20 in ("groq", "openai", "bynara", "gemini", "openrouter"):
+        try:
+            _k = _prov.default_models(_prov20) or []
+            _e20, _ = _mi.enrich_models(_k, _prov20)
+            if not _e20:
+                _ok20 = False
+        except Exception:
             _ok20 = False
-    except Exception:
-        _ok20 = False
-chk(_ok20, "مسیر fallback همهٔ سرویس‌دهنده‌ها سالم است")
+    chk(_ok20, "مسیر fallback همهٔ سرویس‌دهنده‌ها سالم است (مستقل از سفارشی‌های محلی)")
+finally:
+    _prov._load_custom = _orig_lc20
+
+# ── فایل سفارشی معیوب نباید فهرست سرویس/مدل را بشکند ──
+# نمونهٔ واقعی گزارش‌شده: {"groq": "not-a-dict"} یا {"bynara": {"models": 123}}
+import json as _json20
+import tempfile as _tf20
+_dir20 = _tf20.mkdtemp()
+_bad20 = os.path.join(_dir20, "bad.json")
+with open(_bad20, "w", encoding="utf-8") as _f20:
+    _f20.write('{"groq": "not-a-dict", "bynara": {"models": 123}}')
+_orig_sp20 = _prov._store_path
+_prov._store_path = lambda p=_bad20: p
+try:
+    _lc20 = _prov._load_custom()
+    chk(isinstance(_lc20, dict) and "groq" not in _lc20,
+        "مدخل غیردیکشنری از سرویس‌های سفارشی حذف می‌شود", repr(_lc20))
+    try:
+        _dm20 = _prov.default_models("groq")
+        chk(bool(_dm20) and "openai/gpt-oss-120b" in _dm20,
+            "فایل سفارشی معیوب، default_models را نمی‌شکند",
+            repr(_dm20))
+    except Exception as _e20b:
+        chk(False, "فایل سفارشی معیوب، default_models را نمی‌شکند", str(_e20b))
+    try:
+        _lp20 = _prov.list_providers()
+        chk(len(_lp20) >= 5, "list_providers با فایل معیوب سالم می‌ماند",
+            str(len(_lp20)))
+    except Exception as _e20c:
+        chk(False, "list_providers با فایل معیوب سالم می‌ماند", str(_e20c))
+finally:
+    _prov._store_path = _orig_sp20
+
+# ویرایش سفارشی با فهرست مدل خالی → بازگشت به فهرست داخلی
+_g20 = os.path.join(_dir20, "g.json")
+with open(_g20, "w", encoding="utf-8") as _f20:
+    _json20.dump({"groq": {"name": "Groq", "models": []}}, _f20)
+_prov._store_path = lambda p=_g20: p
+try:
+    _dm21 = _prov.default_models("groq")
+    chk(_dm21 and "openai/gpt-oss-120b" in _dm21,
+        "ویرایش سفارشیِ خالی‌شده → بازگشت به فهرست داخلی همان سرویس",
+        repr(_dm21))
+finally:
+    _prov._store_path = _orig_sp20
 
 # ترکیب رشته و دیکت
 try:

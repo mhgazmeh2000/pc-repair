@@ -196,10 +196,20 @@ def _store_path():
 
 
 def _load_custom():
+    """
+    سرویس‌های سفارشی کاربر — همیشه دیکشنریِ سالم برمی‌گرداند.
+
+    فایل ممکن است JSON خراب داشته باشد یا مقدار یک مدخل رشته/عدد باشد
+    (نمونهٔ واقعی گزارش‌شده: {"groq": "my-backup"} که list_providers را
+    با ValueError می‌کشت و فهرست سرویس‌ها/مدل‌ها را خراب می‌کرد).
+    چنین مدخل‌هایی بی‌صدا حذف می‌شوند تا بقیه کار کنند.
+    """
     try:
         with open(_store_path(), encoding="utf-8") as f:
             d = json.load(f)
-            return d if isinstance(d, dict) else {}
+        if not isinstance(d, dict):
+            return {}
+        return {k: v for k, v in d.items() if isinstance(v, dict)}
     except Exception:
         return {}
 
@@ -214,22 +224,35 @@ def _save_custom(data):
 
 
 def _normalize(key, p):
-    """فیلدهای جاافتاده را پر و مقادیر را تمیز می‌کند."""
-    base = (p.get("base_url") or "").strip().rstrip("/")
-    models = p.get("models") or []
+    """
+    فیلدهای جاافتاده را پر و مقادیر را تمیز می‌کند.
+
+    مقاوم در برابر فایل سفارشی معیوب: هر فیلدی ممکن است رشته، عدد یا
+    هر چیز دیگری باشد (نمونهٔ واقعی: models=123 که TypeError می‌داد).
+    مقادیر غیرمجاز به حالت خالی/فهرست خالی تبدیل می‌شوند.
+    """
+    def _s(v):
+        return v.strip() if isinstance(v, str) else ""
+
+    base = _s(p.get("base_url")).rstrip("/")
+    models = p.get("models")
     if isinstance(models, str):
         models = [m.strip() for m in models.replace(",", "\n").split("\n") if m.strip()]
-    default_model = (p.get("default_model") or "").strip() or (models[0] if models else "")
+    elif isinstance(models, list):
+        models = [str(m).strip() for m in models if str(m).strip()]
+    else:
+        models = []
+    default_model = _s(p.get("default_model")) or (models[0] if models else "")
     if default_model and default_model not in models:
         models = [default_model] + models
     return {
         "key": key,
-        "name": (p.get("name") or key).strip(),
-        "desc": (p.get("desc") or "").strip(),
+        "name": _s(p.get("name")) or key,
+        "desc": _s(p.get("desc")),
         "base_url": base,
         "default_model": default_model,
         "models": models,
-        "key_url": (p.get("key_url") or "").strip(),
+        "key_url": _s(p.get("key_url")),
         "needs_proxy": bool(p.get("needs_proxy", False)),
         "custom": bool(p.get("custom", False)),
     }
@@ -242,7 +265,9 @@ def list_providers():
     for k, v in BUILTIN.items():
         item = copy.deepcopy(v)
         # اگر کاربر یک سرویس داخلی را ویرایش کرده، نسخه او اولویت دارد
-        if k in custom:
+        # (محافظ نوع: _load_custom فیلتر می‌کند ولی اگر روزی مسیر دیگری
+        # نوشت، اینجا هم نسازیم)
+        if k in custom and isinstance(custom[k], dict):
             item.update(custom[k])
         out.append(_normalize(k, item))
     for k, v in custom.items():
@@ -350,8 +375,17 @@ def delete_provider(key):
 
 
 def default_models(key):
+    """
+    فهرست مدل‌های پشتیبان سرویس.
+
+    اگر ویرایش سفارشی کاربر فهرست را خالی کرده باشد، به فهرست داخلی
+    همان سرویس برمی‌گردیم تا fallback هرگز بی‌مدل نماند.
+    """
     p = get_provider(key)
-    return p["models"] if p else []
+    models = (p or {}).get("models") or []
+    if not models and key in BUILTIN:
+        models = list(BUILTIN[key].get("models") or [])
+    return models
 
 
 if __name__ == "__main__":
